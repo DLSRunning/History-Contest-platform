@@ -1,0 +1,15 @@
+:root {
+  font-family: 'Noto Serif SC', 'Songti SC', 'Microsoft YaHei', serif;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
