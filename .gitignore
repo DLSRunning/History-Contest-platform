@@ -6,6 +6,8 @@ dist/
 build/
 coverage/
 .vite/
+test-results/
+playwright-report/
 
 # 本地环境文件
 .env

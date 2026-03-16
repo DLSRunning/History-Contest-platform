@@ -14,6 +14,7 @@ const CONTEST_API_PREFIX = (contestRuntimeConfig.api.contestApiPrefix || '/api')
 const COMPETITIONS_API_PREFIX = `${CONTEST_API_PREFIX}/competitions`;
 const REGISTER_API_PREFIX = `${CONTEST_API_PREFIX}/register`;
 const SUBMISSIONS_API_PREFIX = `${CONTEST_API_PREFIX}/submissions`;
+const USER_SYNC_API_PREFIX = `${CONTEST_API_PREFIX}/user-sync`;
 
 function normalizePath(path = '') {
   const value = String(path || '').trim();
@@ -445,6 +446,52 @@ export async function getCreatePermission(options = {}) {
     headers: requestIdHeaders(requestId),
   });
   return !!data?.data?.can_create;
+}
+
+export async function getUserSyncReviewPermission(options = {}) {
+  const { requestId } = options;
+  const { data } = await client.get(`${USER_SYNC_API_PREFIX}/permissions/review`, {
+    headers: requestIdHeaders(requestId),
+  });
+  return !!data?.data?.can_review;
+}
+
+export async function listUserSyncReviewsPaged(limit = 20, offset = 0, keyword = '', options = {}) {
+  const {
+    status = 'pending',
+    requestId,
+  } = options;
+  const response = await client.get(`${USER_SYNC_API_PREFIX}/reviews`, {
+    params: { limit, offset, keyword, status },
+    headers: requestIdHeaders(requestId),
+  });
+  return toPagedResult(response, limit, offset, requestId);
+}
+
+export async function decideUserSyncReview(contestUserId, payload, options = {}) {
+  const { requestId } = options;
+  const response = await client.post(
+    `${USER_SYNC_API_PREFIX}/reviews/${Number(contestUserId)}/decision`,
+    payload,
+    { headers: requestIdHeaders(requestId) }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
+export async function batchDecideUserSyncReview(payload, options = {}) {
+  const { requestId } = options;
+  const response = await client.post(
+    `${USER_SYNC_API_PREFIX}/reviews/batch-decision`,
+    payload,
+    { headers: requestIdHeaders(requestId) }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
 }
 
 export async function getMySubmissionDetail(competitionId, options = {}) {

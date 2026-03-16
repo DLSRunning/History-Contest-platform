@@ -21,6 +21,27 @@ function isRetryableProbeError(error) {
   return status >= 500;
 }
 
+function getApiErrorMessage(error) {
+  return String(
+    error?.response?.data?.message
+    || error?.response?.data?.detail
+    || error?.message
+    || ''
+  ).trim();
+}
+
+function shouldForceRelogin(error) {
+  const status = Number(error?.response?.status || 0);
+  if (status !== 401) return false;
+  const msg = getApiErrorMessage(error);
+  if (!msg || msg.includes('缺少 access_token')) return false;
+  return (
+    msg.includes('用户不存在或已失效')
+    || msg.includes('无效的 access_token')
+    || msg.includes('access_token 已过期')
+  );
+}
+
 function normalizePath(path) {
   const raw = String(path || '/').trim();
   if (!raw) return '/';
@@ -118,6 +139,7 @@ export default function ContestApp({
   createPath = '/create',
   minePath = '/mine',
   profilePath = '/profile',
+  userSyncReviewPath = '/user-sync-review',
   competitionPathPrefix = '/competitions',
   competitionRegisterSuffix = '/register',
   onNavigate,
@@ -138,6 +160,7 @@ export default function ContestApp({
   const normalizedCreatePath = normalizePath(createPath);
   const normalizedMinePath = normalizePath(minePath);
   const normalizedProfilePath = normalizePath(profilePath);
+  const normalizedUserSyncReviewPath = normalizePath(userSyncReviewPath);
   const normalizedCompetitionPathPrefix = normalizePath(competitionPathPrefix);
   const competitionRegisterPathSuffix = String(competitionRegisterSuffix || '/register').trim() || '/register';
   const staticPathToTab = useMemo(
@@ -147,6 +170,7 @@ export default function ContestApp({
       [normalizedCreatePath]: 'create',
       [normalizedMinePath]: 'mine',
       [normalizedProfilePath]: 'profile',
+      [normalizedUserSyncReviewPath]: 'user_sync_review',
     }),
     [
       normalizedHomePath,
@@ -154,6 +178,7 @@ export default function ContestApp({
       normalizedCreatePath,
       normalizedMinePath,
       normalizedProfilePath,
+      normalizedUserSyncReviewPath,
     ]
   );
   const tabToPath = useMemo(
@@ -163,6 +188,7 @@ export default function ContestApp({
       create: normalizedCreatePath,
       mine: normalizedMinePath,
       profile: normalizedProfilePath,
+      user_sync_review: normalizedUserSyncReviewPath,
     }),
     [
       normalizedHomePath,
@@ -170,6 +196,7 @@ export default function ContestApp({
       normalizedCreatePath,
       normalizedMinePath,
       normalizedProfilePath,
+      normalizedUserSyncReviewPath,
     ]
   );
   const isRoutablePath = useCallback(
@@ -241,6 +268,11 @@ export default function ContestApp({
       } catch (error) {
         if (!mounted) return;
         clearUser();
+        if (shouldForceRelogin(error)) {
+          clearClientAuthState();
+          localStorage.removeItem(DASHBOARD_VIEW_STATE_STORAGE_KEY);
+          setMessage({ type: 'warning', text: '登录已失效，请重新登录' });
+        }
         setBackendUnavailable(isRetryableProbeError(error));
       } finally {
         if (mounted) setAuthLoading(false);
@@ -460,6 +492,7 @@ export default function ContestApp({
           onLogout={logout}
           onGoLogin={() => navigateTo(normalizedLoginPath)}
           setMessage={setMessage}
+          userSyncReviewPath={normalizedUserSyncReviewPath}
         />
       )}
     </>

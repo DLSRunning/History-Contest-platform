@@ -4,6 +4,7 @@ import {
   Box,
   ButtonBase,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   Dialog,
@@ -36,6 +37,7 @@ import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRou
 import EditNoteRoundedIcon from '@mui/icons-material/EditNoteRounded';
 import HowToRegRoundedIcon from '@mui/icons-material/HowToRegRounded';
 import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
+import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import InsertDriveFileRoundedIcon from '@mui/icons-material/InsertDriveFileRounded';
@@ -44,17 +46,21 @@ import {
   createCompetition,
   createRequestId,
   createSubmission,
+  batchDecideUserSyncReview,
+  decideUserSyncReview,
   deleteCompetition,
   getCompetitionById,
   getCreatePermission,
   getMySubmissionAttachmentBlob,
   getMySubmissionDetail,
+  getUserSyncReviewPermission,
   listCompetitionParticipantsStatusPaged,
   listCompetitionsPaged,
   listMyCompetitionsPaged,
   listMyRegisteredCompetitionsPaged,
   listMySubmissionsPaged,
   listParticipants,
+  listUserSyncReviewsPaged,
   registerParticipant,
   resubmitSubmission,
   unregisterParticipant,
@@ -68,13 +74,19 @@ import { getUserFriendlyErrorText } from '../../../utils/errorText';
 const CONTEST_API_PREFIX = (contestRuntimeConfig.api.contestApiPrefix || '/contest/api').replace(/\/+$/, '');
 const SUBMISSION_ATTACHMENT_ENDPOINT = `${CONTEST_API_PREFIX}/submissions/my/attachment`;
 
-const NAV_ITEMS = [
+const BASE_NAV_ITEMS = [
   { key: 'home', label: '首页', icon: <HomeRoundedIcon fontSize="small" /> },
   { key: 'my_contests', label: '我的比赛', icon: <HowToRegRoundedIcon fontSize="small" /> },
   { key: 'create', label: '创办比赛', icon: <AddCircleOutlineRoundedIcon fontSize="small" /> },
   { key: 'mine', label: '我创办的比赛', icon: <EditNoteRoundedIcon fontSize="small" /> },
   { key: 'profile', label: '个人信息', icon: <PersonRoundedIcon fontSize="small" /> },
 ];
+const USER_SYNC_REVIEW_NAV_ITEM = {
+  key: 'user_sync_review',
+  label: '用户同步审核',
+  icon: <AdminPanelSettingsRoundedIcon fontSize="small" />,
+};
+const ALL_NAV_ITEMS = [...BASE_NAV_ITEMS, USER_SYNC_REVIEW_NAV_ITEM];
 export const DASHBOARD_VIEW_STATE_STORAGE_KEY = 'competition_dashboard_view_state';
 const PAGE_SIZE = 7;
 const PARTICIPANTS_PAGE_SIZE = 20;
@@ -135,6 +147,20 @@ const COMPETITION_OPTIONAL_TIMELINE_FIELDS = [
   { key: 'review_end', label: '评审结束时间' },
 ];
 const DOCX_PREVIEW_TIMEOUT_MS = 15000;
+const MAX_UINT32 = 4294967295;
+const MAX_UINT32_BIGINT = BigInt(MAX_UINT32);
+const USER_SYNC_REVIEW_STATUS_OPTIONS = [
+  { value: 'pending', label: '待审核' },
+  { value: 'rejected', label: '已拒绝' },
+  { value: 'conflict', label: '冲突' },
+  { value: 'all', label: '全部' },
+];
+const USER_SYNC_REVIEW_CONFIRM_TEXT = {
+  approve: '确认同步',
+  reject: '确认拒绝',
+};
+const USER_SYNC_CONFLICT_HINT =
+  '“冲突”表示系统在同步到 users 时，发现邮箱/手机号无法唯一对应同一账号（如分别命中不同用户），为避免错绑账号而拒绝自动同步。';
 const CONTEST_THEME = {
   pageBg: 'linear-gradient(155deg, #f6f0ff 0%, #e9ddfb 45%, #f8f4ff 100%)',
   sideNavBg: 'linear-gradient(180deg, #4b2b7f 0%, #6a3ea3 100%)',
@@ -191,6 +217,11 @@ function normalizeAllowedFormats(value) {
 function normalizeAttachmentMode(value) {
   const token = String(value || '').trim().toLowerCase();
   return token === 'multiple' ? 'multiple' : 'single';
+}
+
+function normalizeParticipantLimitMode(value) {
+  const token = String(value || '').trim().toLowerCase();
+  return token === 'in_school' ? 'in_school' : 'unlimited';
 }
 
 function toInputDateTime(v) {
@@ -349,11 +380,6 @@ function submissionStatusLabel(value) {
   return value === 'submitted' ? '已提交作品' : '未提交作品';
 }
 
-function normalizeParticipantLimitMode(value) {
-  const normalized = String(value || '').trim().toLowerCase();
-  return normalized === 'in_school' ? 'in_school' : 'unlimited';
-}
-
 function normalizeLimitValue(value) {
   const normalized = String(value || '').trim();
   if (!normalized || normalized === UNLIMITED_TEXT) return '';
@@ -430,7 +456,11 @@ function validateProfileForm(form) {
 }
 
 function competitionLimitText(item) {
-  return registrationCodeRequired(item) ? '报名码限制' : '无限制';
+  const limitMode = normalizeParticipantLimitMode(item?.participant_limit_mode);
+  const parts = [];
+  if (limitMode === 'in_school') parts.push('仅在校生');
+  if (registrationCodeRequired(item)) parts.push('邀请码');
+  return parts.length ? parts.join(' + ') : '无限制';
 }
 
 function registrationCodeRequired(item) {
@@ -444,6 +474,25 @@ function competitionAttachmentText(item) {
     ? '多附件'
     : '单附件';
   return `${formats} ｜ ${mode}`;
+}
+
+function userSyncReviewStatusLabel(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'rejected') return '已拒绝';
+  if (normalized === 'conflict') return '冲突';
+  return '待审核';
+}
+
+function userSyncReviewStatusColor(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'rejected') return 'warning';
+  if (normalized === 'conflict') return 'error';
+  return 'info';
+}
+
+function userSyncReviewActionText(action) {
+  const normalized = String(action || '').trim().toLowerCase();
+  return normalized === 'reject' ? '拒绝' : '通过';
 }
 
 function buildSubmissionFormFromRow(row) {
@@ -534,6 +583,7 @@ function loadDashboardViewState() {
 
 function buildPayload(form) {
   const attachmentMode = normalizeAttachmentMode(form.attachment_mode);
+  const participantLimitMode = normalizeParticipantLimitMode(form.participant_limit_mode);
   return {
     competition_info: {
       name: form.name.trim(),
@@ -548,7 +598,7 @@ function buildPayload(form) {
       team_mode: form.team_mode,
       min_team_size: Number(form.min_team_size),
       max_team_size: Number(form.max_team_size),
-      participant_limit_mode: 'unlimited',
+      participant_limit_mode: participantLimitMode,
       school: '',
       major: '',
       grade: '',
@@ -570,20 +620,89 @@ function buildPayload(form) {
   };
 }
 
+function parseIntegerFieldValue(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return { ok: false, value: null };
+  if (!/^-?\d+$/.test(raw)) return { ok: false, value: null };
+  try {
+    return { ok: true, value: BigInt(raw) };
+  } catch {
+    return { ok: false, value: null };
+  }
+}
+
+function blockNonIntegerKeyInput(event) {
+  const blocked = ['e', 'E', '+', '-', '.', ','];
+  if (blocked.includes(event.key)) {
+    event.preventDefault();
+  }
+}
+
+function blockNonIntegerPaste(event) {
+  const text = String(event?.clipboardData?.getData('text') || '').trim();
+  if (!text) return;
+  if (!/^\d+$/.test(text)) {
+    event.preventDefault();
+  }
+}
+
 function validateForm(form) {
   const errors = {};
   if (!form.name.trim()) errors.name = '比赛名称不能为空';
   if (!form.registration_start) errors.registration_start = '请填写报名开始时间';
   if (!toFormatList(form.allowed_formats).length) errors.allowed_formats = '请至少选择一种允许格式';
-  if (Number(form.max_participants) <= 0) errors.max_participants = '最大参赛人数需大于0';
-  if (Number(form.max_modifications) < 0) errors.max_modifications = '最多修改次数不能小于0';
-  if (Number(form.max_file_size_mb) <= 0) errors.max_file_size_mb = '文件上限MB需大于0';
+
+  const maxParticipants = parseIntegerFieldValue(form.max_participants);
+  if (!maxParticipants.ok) {
+    errors.max_participants = '请输入有效整数';
+  } else if (maxParticipants.value > MAX_UINT32_BIGINT) {
+    errors.max_participants = '数值过大';
+  } else if (maxParticipants.value <= 0n) {
+    errors.max_participants = '必须大于0';
+  }
+
+  const maxModifications = parseIntegerFieldValue(form.max_modifications);
+  if (!maxModifications.ok) {
+    errors.max_modifications = '请输入有效整数';
+  } else if (maxModifications.value > MAX_UINT32_BIGINT) {
+    errors.max_modifications = '数值过大';
+  } else if (maxModifications.value <= 0n) {
+    errors.max_modifications = '必须大于0';
+  }
+
+  const maxFileSizeMb = parseIntegerFieldValue(form.max_file_size_mb);
+  if (!maxFileSizeMb.ok) {
+    errors.max_file_size_mb = '请输入有效整数';
+  } else if (maxFileSizeMb.value > MAX_UINT32_BIGINT) {
+    errors.max_file_size_mb = '数值过大';
+  } else if (maxFileSizeMb.value <= 0n) {
+    errors.max_file_size_mb = '必须大于0';
+  }
+
+  const minWordCount = parseIntegerFieldValue(form.min_word_count);
+  if (!minWordCount.ok) {
+    errors.min_word_count = '请输入有效整数';
+  } else if (minWordCount.value > MAX_UINT32_BIGINT) {
+    errors.min_word_count = '数值过大';
+  } else if (minWordCount.value <= 0n) {
+    errors.min_word_count = '必须大于0';
+  }
+
+  const maxWordCount = parseIntegerFieldValue(form.max_word_count);
+  if (!maxWordCount.ok) {
+    errors.max_word_count = '请输入有效整数';
+  } else if (maxWordCount.value > MAX_UINT32_BIGINT) {
+    errors.max_word_count = '数值过大';
+  } else if (maxWordCount.value <= 0n) {
+    errors.max_word_count = '必须大于0';
+  }
+
   if (form.team_mode !== 'individual') errors.team_mode = '团队赛功能还未开发，当前仅支持个人赛';
   if (form.team_mode !== 'individual' && Number(form.min_team_size) > Number(form.max_team_size)) {
     errors.min_team_size = '最小团队人数不能大于最大团队人数';
     errors.max_team_size = '最大团队人数不能小于最小团队人数';
   }
-  if (Number(form.min_word_count) > Number(form.max_word_count)) {
+  if (minWordCount.ok && maxWordCount.ok && minWordCount.value > maxWordCount.value) {
     errors.min_word_count = '最小字数不能大于最大字数';
     errors.max_word_count = '最大字数不能小于最小字数';
   }
@@ -862,6 +981,12 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
       return next;
     });
   };
+  const integerInputBase = {
+    inputMode: 'numeric',
+    pattern: '[0-9]*',
+    onKeyDown: blockNonIntegerKeyInput,
+    onPaste: blockNonIntegerPaste,
+  };
 
   return (
     <Stack spacing={2}>
@@ -908,7 +1033,7 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
       <Divider />
       <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>规则设置</Typography>
       <Grid2 container spacing={2}>
-        <Grid2 size={3}><TextField type="number" fullWidth label="最大参赛人数" value={form.max_participants} onChange={set('max_participants')} error={!!errors.max_participants} helperText={errors.max_participants} /></Grid2>
+        <Grid2 size={3}><TextField type="number" fullWidth label="最大参赛人数" value={form.max_participants} onChange={set('max_participants')} error={!!errors.max_participants} helperText={errors.max_participants} slotProps={{ input: { ...integerInputBase, min: 1, max: MAX_UINT32, step: 1 } }} /></Grid2>
         <Grid2 size={3}>
           <FormControl fullWidth error={!!errors.team_mode}>
             <InputLabel>参赛模式</InputLabel>
@@ -925,25 +1050,43 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
         </Grid2>
         <Grid2 size={3}>
           <FormControl fullWidth>
-            <InputLabel>报名限制</InputLabel>
+            <InputLabel>就读状态限制</InputLabel>
             <Select
-              label="报名限制"
-              value={form.registration_code_required ? 'registration_code' : 'unlimited'}
+              label="就读状态限制"
+              value={normalizeParticipantLimitMode(form.participant_limit_mode)}
+              onChange={set('participant_limit_mode')}
+            >
+              <MenuItem value="unlimited">无限制</MenuItem>
+              <MenuItem value="in_school">仅在校生</MenuItem>
+            </Select>
+            <FormHelperText>
+              {normalizeParticipantLimitMode(form.participant_limit_mode) === 'in_school'
+                ? '仅在校生可报名。'
+                : '所有用户在报名阶段均可报名。'}
+            </FormHelperText>
+          </FormControl>
+        </Grid2>
+        <Grid2 size={3}>
+          <FormControl fullWidth>
+            <InputLabel>邀请码限制</InputLabel>
+            <Select
+              label="邀请码限制"
+              value={form.registration_code_required ? 'required' : 'unlimited'}
               onChange={(event) => {
                 const mode = String(event.target.value || 'unlimited');
                 setForm((prev) => ({
                   ...prev,
-                  registration_code_required: mode === 'registration_code',
+                  registration_code_required: mode === 'required',
                 }));
               }}
             >
               <MenuItem value="unlimited">无限制</MenuItem>
-              <MenuItem value="registration_code">报名码限制（系统自动生成）</MenuItem>
+              <MenuItem value="required">需要邀请码（系统自动生成）</MenuItem>
             </Select>
             <FormHelperText>
               {form.registration_code_required
-                ? '创建后系统自动生成报名码，报名时需输入该报名码。'
-                : '所有用户在报名阶段均可直接报名。'}
+                ? '创建后系统自动生成邀请码；用户满足就读状态限制后，还需填写邀请码才能报名。'
+                : '不校验邀请码。'}
             </FormHelperText>
           </FormControl>
         </Grid2>
@@ -988,10 +1131,10 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
             {!errors.attachment_mode && <FormHelperText>默认单附件；多附件模式下将强制每种允许格式都要上传。</FormHelperText>}
           </FormControl>
         </Grid2>
-        <Grid2 size={2}><TextField type="number" fullWidth label="最小字数" value={form.min_word_count} onChange={set('min_word_count')} error={!!errors.min_word_count} helperText={errors.min_word_count} /></Grid2>
-        <Grid2 size={2}><TextField type="number" fullWidth label="最大字数" value={form.max_word_count} onChange={set('max_word_count')} error={!!errors.max_word_count} helperText={errors.max_word_count} /></Grid2>
+        <Grid2 size={2}><TextField type="number" fullWidth label="最小字数" value={form.min_word_count} onChange={set('min_word_count')} error={!!errors.min_word_count} helperText={errors.min_word_count} slotProps={{ input: { ...integerInputBase, min: 1, max: MAX_UINT32, step: 1 } }} /></Grid2>
+        <Grid2 size={2}><TextField type="number" fullWidth label="最大字数" value={form.max_word_count} onChange={set('max_word_count')} error={!!errors.max_word_count} helperText={errors.max_word_count} slotProps={{ input: { ...integerInputBase, min: 1, max: MAX_UINT32, step: 1 } }} /></Grid2>
         <Grid2 size={2}><TextField type="number" fullWidth label="文件上限MB(自动估算)" value={form.max_file_size_mb} slotProps={{ input: { readOnly: true } }} error={!!errors.max_file_size_mb} helperText={errors.max_file_size_mb} /></Grid2>
-        <Grid2 size={2}><TextField type="number" fullWidth label="最多修改次数" value={form.max_modifications} onChange={set('max_modifications')} error={!!errors.max_modifications} helperText={errors.max_modifications} /></Grid2>
+        <Grid2 size={2}><TextField type="number" fullWidth label="最多修改次数" value={form.max_modifications} onChange={set('max_modifications')} error={!!errors.max_modifications} helperText={errors.max_modifications} slotProps={{ input: { ...integerInputBase, min: 1, max: MAX_UINT32, step: 1 } }} /></Grid2>
 
         <Grid2 size={3}>
           <FormControl fullWidth>
@@ -1093,9 +1236,9 @@ function Dashboard({
     return saved;
   }, [user?.email]);
   const [tab, setTab] = useState(() => {
-    if (NAV_ITEMS.some((i) => i.key === routeTab)) return routeTab;
+    if (ALL_NAV_ITEMS.some((i) => i.key === routeTab)) return routeTab;
     const savedTab = persistedViewState.tab;
-    return NAV_ITEMS.some((i) => i.key === savedTab) ? savedTab : 'home';
+    return ALL_NAV_ITEMS.some((i) => i.key === savedTab) ? savedTab : 'home';
   });
   const [homeLoading, setHomeLoading] = useState(false);
   const [mineLoading, setMineLoading] = useState(false);
@@ -1103,6 +1246,7 @@ function Dashboard({
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [canCreateCompetition, setCanCreateCompetition] = useState(false);
+  const [createPermissionLoaded, setCreatePermissionLoaded] = useState(false);
   const [homeRows, setHomeRows] = useState([]);
   const [mineRows, setMineRows] = useState([]);
   const [myContestRows, setMyContestRows] = useState([]);
@@ -1129,6 +1273,29 @@ function Dashboard({
   const [profileEditing, setProfileEditing] = useState(false);
   const [profileErrors, setProfileErrors] = useState({});
   const [profileSaving, setProfileSaving] = useState(false);
+  const [canReviewUserSync, setCanReviewUserSync] = useState(false);
+  const [userSyncPermissionLoaded, setUserSyncPermissionLoaded] = useState(false);
+  const [userSyncLoading, setUserSyncLoading] = useState(false);
+  const [userSyncRows, setUserSyncRows] = useState([]);
+  const [userSyncKeywordInput, setUserSyncKeywordInput] = useState(() => String(persistedViewState.userSyncKeywordInput || ''));
+  const [userSyncKeyword, setUserSyncKeyword] = useState(() => String(persistedViewState.userSyncKeyword || ''));
+  const [userSyncStatus, setUserSyncStatus] = useState(() => String(persistedViewState.userSyncStatus || 'pending'));
+  const [userSyncPage, setUserSyncPage] = useState(() => Math.max(1, Number(persistedViewState.userSyncPage || 1)));
+  const [userSyncHasNext, setUserSyncHasNext] = useState(false);
+  const [userSyncTotalPages, setUserSyncTotalPages] = useState(1);
+  const [userSyncReviewOpen, setUserSyncReviewOpen] = useState(false);
+  const [userSyncReviewTarget, setUserSyncReviewTarget] = useState(null);
+  const [userSyncDecisionOpen, setUserSyncDecisionOpen] = useState(false);
+  const [userSyncDecisionAction, setUserSyncDecisionAction] = useState('approve');
+  const [userSyncDecisionConfirmText, setUserSyncDecisionConfirmText] = useState('');
+  const [userSyncDecisionReason, setUserSyncDecisionReason] = useState('');
+  const [userSyncDecisionLoading, setUserSyncDecisionLoading] = useState(false);
+  const [userSyncSelectedIds, setUserSyncSelectedIds] = useState([]);
+  const [userSyncBatchDecisionOpen, setUserSyncBatchDecisionOpen] = useState(false);
+  const [userSyncBatchAction, setUserSyncBatchAction] = useState('approve');
+  const [userSyncBatchConfirmText, setUserSyncBatchConfirmText] = useState('');
+  const [userSyncBatchReason, setUserSyncBatchReason] = useState('');
+  const [userSyncBatchDecisionLoading, setUserSyncBatchDecisionLoading] = useState(false);
   const [createForm, setCreateForm] = useState(EMPTY_FORM);
   const [createErrors, setCreateErrors] = useState({});
   const [editOpen, setEditOpen] = useState(() => Boolean(persistedViewState.editOpen));
@@ -1195,6 +1362,7 @@ function Dashboard({
     home: '',
     mine: '',
     myContests: '',
+    userSync: '',
     detail: '',
     submission: '',
     participants: '',
@@ -1272,6 +1440,25 @@ function Dashboard({
     if (Number.isNaN(competitionId)) return null;
     return submittedCompetitionMap[competitionId] || null;
   }, [detailData?.id, submittedCompetitionMap]);
+  const userSyncCurrentPageIds = useMemo(
+    () => userSyncRows
+      .map((row) => Number(row?.contest_user_id))
+      .filter((id) => !Number.isNaN(id) && id > 0),
+    [userSyncRows]
+  );
+  const userSyncSelectedIdSet = useMemo(
+    () => new Set(userSyncSelectedIds),
+    [userSyncSelectedIds]
+  );
+  const userSyncAllCurrentSelected = useMemo(
+    () => userSyncCurrentPageIds.length > 0 && userSyncCurrentPageIds.every((id) => userSyncSelectedIdSet.has(id)),
+    [userSyncCurrentPageIds, userSyncSelectedIdSet]
+  );
+  const userSyncCurrentIndeterminate = useMemo(() => {
+    if (!userSyncCurrentPageIds.length) return false;
+    const selectedCount = userSyncCurrentPageIds.filter((id) => userSyncSelectedIdSet.has(id)).length;
+    return selectedCount > 0 && selectedCount < userSyncCurrentPageIds.length;
+  }, [userSyncCurrentPageIds, userSyncSelectedIdSet]);
   const myInfoData = useMemo(() => {
     const competitionId = Number(myInfoCompetition?.id || myInfoCompetition?.competition_id);
     if (Number.isNaN(competitionId)) return null;
@@ -1347,11 +1534,33 @@ function Dashboard({
     });
   }, [myContestRows]);
 
-  const navItems = useMemo(
-    () => (user ? NAV_ITEMS : NAV_ITEMS.filter((item) => item.key === 'home')),
-    [user]
-  );
-  const title = useMemo(() => navItems.find((i) => i.key === tab)?.label || '首页', [tab]);
+  const navItems = useMemo(() => {
+    if (!user) return BASE_NAV_ITEMS.filter((item) => item.key === 'home');
+    const keepCreatorTabsWhileLoading =
+      !createPermissionLoaded &&
+      (routeTab === 'create' || routeTab === 'mine' || tab === 'create' || tab === 'mine');
+    const canAccessCreatorTabs = canCreateCompetition || keepCreatorTabsWhileLoading;
+    const visibleBaseNavItems = canAccessCreatorTabs
+      ? BASE_NAV_ITEMS
+      : BASE_NAV_ITEMS.filter((item) => item.key !== 'create' && item.key !== 'mine');
+
+    if (!canReviewUserSync) {
+      if (!userSyncPermissionLoaded && routeTab === 'user_sync_review') {
+        return [
+          ...visibleBaseNavItems.filter((item) => item.key !== 'profile'),
+          USER_SYNC_REVIEW_NAV_ITEM,
+          ...visibleBaseNavItems.filter((item) => item.key === 'profile'),
+        ];
+      }
+      return visibleBaseNavItems;
+    }
+    return [
+      ...visibleBaseNavItems.filter((item) => item.key !== 'profile'),
+      USER_SYNC_REVIEW_NAV_ITEM,
+      ...visibleBaseNavItems.filter((item) => item.key === 'profile'),
+    ];
+  }, [user, canCreateCompetition, createPermissionLoaded, tab, canReviewUserSync, userSyncPermissionLoaded, routeTab]);
+  const title = useMemo(() => navItems.find((i) => i.key === tab)?.label || '首页', [navItems, tab]);
   const switchTab = (nextTab, syncRoute = true) => {
     if (!nextTab || nextTab === tab) return;
     setTab(nextTab);
@@ -1374,7 +1583,8 @@ function Dashboard({
   const currentTabLoading =
     (tab === 'home' && homeLoading) ||
     (tab === 'mine' && mineLoading) ||
-    (tab === 'my_contests' && myContestsLoading);
+    (tab === 'my_contests' && myContestsLoading) ||
+    (tab === 'user_sync_review' && userSyncLoading);
 
   const buildCompetitionPath = (competitionId, mode = 'detail') => {
     const id = Number(competitionId);
@@ -1486,18 +1696,281 @@ function Dashboard({
       setMyParticipantMap(participantMap);
       setRegisteredCompetitionIds(normalizeCompetitionIds(serverIds));
     } catch {
-      setMyParticipantMap({});
-      setRegisteredCompetitionIds([]);
+      // 保留上一次成功状态，避免请求偶发失败时把“已报名”错误回退成“未报名”。
     }
   };
 
   const loadCreatePermission = async () => {
+    setCreatePermissionLoaded(false);
     try {
       const canCreate = await getCreatePermission();
       setCanCreateCompetition(canCreate);
     } catch {
       setCanCreateCompetition(false);
+    } finally {
+      setCreatePermissionLoaded(true);
     }
+  };
+
+  const loadUserSyncReviewPermission = async () => {
+    if (!user) {
+      setCanReviewUserSync(false);
+      setUserSyncPermissionLoaded(false);
+      return;
+    }
+    try {
+      const canReview = await getUserSyncReviewPermission({ requestId: createRequestId() });
+      setCanReviewUserSync(Boolean(canReview));
+    } catch {
+      setCanReviewUserSync(false);
+    } finally {
+      setUserSyncPermissionLoaded(true);
+    }
+  };
+
+  const loadUserSyncReviews = async (
+    keyword = userSyncKeyword,
+    page = userSyncPage,
+    status = userSyncStatus,
+  ) => {
+    if (!canReviewUserSync) {
+      setUserSyncRows([]);
+      setUserSyncHasNext(false);
+      setUserSyncTotalPages(1);
+      return;
+    }
+    const requestId = createRequestId();
+    latestRequestIdsRef.current.userSync = requestId;
+    setUserSyncLoading(true);
+    try {
+      const offset = (Math.max(1, Number(page) || 1) - 1) * PAGE_SIZE;
+      const { items, total, requestId: echoedRequestId } = await listUserSyncReviewsPaged(PAGE_SIZE, offset, keyword, {
+        status,
+        requestId,
+      });
+      if (latestRequestIdsRef.current.userSync !== echoedRequestId) return;
+      const totalPages = Math.max(1, Math.ceil((Number(total) || 0) / PAGE_SIZE));
+      setUserSyncRows(Array.isArray(items) ? items : []);
+      setUserSyncTotalPages(totalPages);
+      setUserSyncHasNext(page < totalPages);
+    } catch (error) {
+      if (latestRequestIdsRef.current.userSync !== requestId) return;
+      setUserSyncRows([]);
+      setUserSyncHasNext(false);
+      setUserSyncTotalPages(1);
+      setMessage({ type: 'error', text: getErrorText(error, '加载用户同步审核列表失败') });
+    } finally {
+      if (latestRequestIdsRef.current.userSync === requestId) setUserSyncLoading(false);
+    }
+  };
+
+  const openUserSyncReview = (row) => {
+    if (!row?.contest_user_id) return;
+    setUserSyncReviewTarget(row);
+    setUserSyncReviewOpen(true);
+  };
+
+  const closeUserSyncReview = () => {
+    setUserSyncReviewOpen(false);
+    setUserSyncReviewTarget(null);
+  };
+
+  const toggleUserSyncRowSelection = (contestUserId, checked) => {
+    const targetId = Number(contestUserId);
+    if (Number.isNaN(targetId) || targetId <= 0) return;
+    setUserSyncSelectedIds((prev) => {
+      const exists = prev.includes(targetId);
+      if (checked && !exists) return [...prev, targetId];
+      if (!checked && exists) return prev.filter((id) => id !== targetId);
+      return prev;
+    });
+  };
+
+  const toggleUserSyncSelectCurrentPage = (checked) => {
+    const visibleIds = userSyncCurrentPageIds;
+    if (!visibleIds.length) return;
+    setUserSyncSelectedIds((prev) => {
+      if (checked) {
+        return [...new Set([...prev, ...visibleIds])];
+      }
+      const visibleSet = new Set(visibleIds);
+      return prev.filter((id) => !visibleSet.has(id));
+    });
+  };
+
+  const clearUserSyncSelection = () => {
+    setUserSyncSelectedIds([]);
+  };
+
+  const openUserSyncDecisionDialog = (action = 'approve') => {
+    const normalizedAction = String(action || '').trim().toLowerCase() === 'reject' ? 'reject' : 'approve';
+    setUserSyncDecisionAction(normalizedAction);
+    setUserSyncDecisionConfirmText('');
+    setUserSyncDecisionReason('');
+    setUserSyncDecisionOpen(true);
+  };
+
+  const closeUserSyncDecisionDialog = () => {
+    if (userSyncDecisionLoading) return;
+    setUserSyncDecisionOpen(false);
+    setUserSyncDecisionConfirmText('');
+    setUserSyncDecisionReason('');
+  };
+
+  const openUserSyncBatchDecisionDialog = (action = 'approve') => {
+    if (!userSyncSelectedIds.length) {
+      setMessage({ type: 'warning', text: '请先勾选要审核的用户' });
+      return;
+    }
+    const normalizedAction = String(action || '').trim().toLowerCase() === 'reject' ? 'reject' : 'approve';
+    setUserSyncBatchAction(normalizedAction);
+    setUserSyncBatchConfirmText('');
+    setUserSyncBatchReason('');
+    setUserSyncBatchDecisionOpen(true);
+  };
+
+  const closeUserSyncBatchDecisionDialog = () => {
+    if (userSyncBatchDecisionLoading) return;
+    setUserSyncBatchDecisionOpen(false);
+    setUserSyncBatchConfirmText('');
+    setUserSyncBatchReason('');
+  };
+
+  const submitUserSyncDecision = async () => {
+    const contestUserId = Number(userSyncReviewTarget?.contest_user_id);
+    if (Number.isNaN(contestUserId) || contestUserId <= 0) return;
+    const action = userSyncDecisionAction === 'reject' ? 'reject' : 'approve';
+    const requiredText = USER_SYNC_REVIEW_CONFIRM_TEXT[action];
+    const confirmText = String(userSyncDecisionConfirmText || '').trim();
+    if (confirmText !== requiredText) {
+      setMessage({ type: 'warning', text: `请输入“${requiredText}”后再提交` });
+      return;
+    }
+
+    setUserSyncDecisionLoading(true);
+    try {
+      await decideUserSyncReview(
+        contestUserId,
+        {
+          action,
+          confirm: true,
+          confirm_text: confirmText,
+          reason: String(userSyncDecisionReason || '').trim(),
+        },
+        { requestId: createRequestId() },
+      );
+      setMessage({ type: 'success', text: `审核成功：已${userSyncReviewActionText(action)}` });
+      setUserSyncSelectedIds((prev) => prev.filter((id) => id !== contestUserId));
+      setUserSyncDecisionOpen(false);
+      closeUserSyncReview();
+      await loadUserSyncReviews(userSyncKeyword, userSyncPage, userSyncStatus);
+    } catch (error) {
+      const errorStatus = Number(error?.response?.status || 0);
+      const errorText = getErrorText(error, '审核失败');
+      const isConflict = errorStatus === 409 && errorText.includes('同步冲突');
+      if (isConflict) {
+        setUserSyncDecisionOpen(false);
+        setUserSyncDecisionConfirmText('');
+        setUserSyncDecisionReason('');
+        setUserSyncReviewTarget((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            review_status: 'conflict',
+            latest_review: {
+              ...(prev.latest_review || {}),
+              action: 'approve',
+              result_status: 'conflict',
+              reason: '同步冲突：手机号/邮箱在 users 表中存在冲突，请人工处理',
+              created_at: new Date().toISOString(),
+            },
+          };
+        });
+        await loadUserSyncReviews(userSyncKeyword, userSyncPage, userSyncStatus);
+      }
+      setMessage({ type: 'error', text: getErrorText(error, '审核失败') });
+    } finally {
+      setUserSyncDecisionLoading(false);
+    }
+  };
+
+  const submitUserSyncBatchDecision = async () => {
+    const ids = [...new Set(userSyncSelectedIds.map((id) => Number(id)).filter((id) => !Number.isNaN(id) && id > 0))];
+    if (!ids.length) {
+      setMessage({ type: 'warning', text: '请先勾选要审核的用户' });
+      return;
+    }
+    const action = userSyncBatchAction === 'reject' ? 'reject' : 'approve';
+    const requiredText = USER_SYNC_REVIEW_CONFIRM_TEXT[action];
+    const confirmText = String(userSyncBatchConfirmText || '').trim();
+    if (confirmText !== requiredText) {
+      setMessage({ type: 'warning', text: `请输入“${requiredText}”后再提交` });
+      return;
+    }
+
+    setUserSyncBatchDecisionLoading(true);
+    try {
+      const { data } = await batchDecideUserSyncReview(
+        {
+          contest_user_ids: ids,
+          action,
+          confirm: true,
+          confirm_text: confirmText,
+          reason: String(userSyncBatchReason || '').trim(),
+        },
+        { requestId: createRequestId() },
+      );
+      const summary = data?.summary || {};
+      const total = Number(summary.total || ids.length);
+      const success = Number(summary.success || 0);
+      const failed = Number(summary.failed || 0);
+      const conflict = Number(summary.conflict || 0);
+      const idempotent = Number(summary.idempotent || 0);
+      const detailText = `总数 ${total}，成功 ${success}，失败 ${failed}${conflict > 0 ? `，冲突 ${conflict}` : ''}${idempotent > 0 ? `，幂等 ${idempotent}` : ''}`;
+      setMessage({ type: failed > 0 ? 'warning' : 'success', text: `批量审核完成：${detailText}` });
+      setUserSyncBatchDecisionOpen(false);
+      setUserSyncSelectedIds([]);
+      const reviewTargetId = Number(userSyncReviewTarget?.contest_user_id || 0);
+      if (reviewTargetId > 0 && ids.includes(reviewTargetId)) {
+        closeUserSyncReview();
+      }
+      await loadUserSyncReviews(userSyncKeyword, userSyncPage, userSyncStatus);
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorText(error, '批量审核失败') });
+    } finally {
+      setUserSyncBatchDecisionLoading(false);
+    }
+  };
+
+  const searchUserSyncReviews = async () => {
+    const keyword = String(userSyncKeywordInput || '').trim();
+    setUserSyncSelectedIds([]);
+    setUserSyncKeyword(keyword);
+    setUserSyncPage(1);
+    await loadUserSyncReviews(keyword, 1, userSyncStatus);
+  };
+
+  const clearUserSyncReviewsSearch = async () => {
+    setUserSyncSelectedIds([]);
+    setUserSyncKeywordInput('');
+    setUserSyncKeyword('');
+    setUserSyncPage(1);
+    await loadUserSyncReviews('', 1, userSyncStatus);
+  };
+
+  const changeUserSyncStatus = async (nextStatus) => {
+    const status = String(nextStatus || 'pending').trim().toLowerCase();
+    setUserSyncSelectedIds([]);
+    setUserSyncStatus(status);
+    setUserSyncPage(1);
+    await loadUserSyncReviews(userSyncKeyword, 1, status);
+  };
+
+  const changeUserSyncPage = async (nextPage) => {
+    const safePage = Math.max(1, Number(nextPage) || 1);
+    setUserSyncSelectedIds([]);
+    setUserSyncPage(safePage);
+    await loadUserSyncReviews(userSyncKeyword, safePage, userSyncStatus);
   };
 
   const loadSubmissionStatus = async () => {
@@ -1581,8 +2054,23 @@ function Dashboard({
     if (tab === 'home') loadHome(homeKeyword, homePage);
     if (!user) return;
     if (tab === 'my_contests') loadMyContests(myContestKeyword, myContestPage);
-    if (tab === 'mine') loadMine(mineKeyword, minePage);
-  }, [tab, homeKeyword, homePage, mineKeyword, minePage, myContestKeyword, myContestPage, user?.email]);
+    if (tab === 'mine' && canCreateCompetition) loadMine(mineKeyword, minePage);
+    if (tab === 'user_sync_review') loadUserSyncReviews(userSyncKeyword, userSyncPage, userSyncStatus);
+  }, [
+    tab,
+    homeKeyword,
+    homePage,
+    mineKeyword,
+    minePage,
+    myContestKeyword,
+    myContestPage,
+    userSyncKeyword,
+    userSyncPage,
+    userSyncStatus,
+    canCreateCompetition,
+    canReviewUserSync,
+    user?.email,
+  ]);
 
   useEffect(() => {
     if (navItems.some((item) => item.key === tab)) return;
@@ -1637,10 +2125,44 @@ function Dashboard({
   useEffect(() => {
     if (!user) {
       setCanCreateCompetition(false);
+      setCreatePermissionLoaded(false);
       return;
     }
     loadCreatePermission();
   }, [user?.email]);
+
+  useEffect(() => {
+    if (!user) {
+      setCanReviewUserSync(false);
+      setUserSyncPermissionLoaded(false);
+      setUserSyncRows([]);
+      setUserSyncHasNext(false);
+      setUserSyncTotalPages(1);
+      setUserSyncReviewOpen(false);
+      setUserSyncReviewTarget(null);
+      setUserSyncDecisionOpen(false);
+      setUserSyncSelectedIds([]);
+      setUserSyncBatchDecisionOpen(false);
+      return;
+    }
+    loadUserSyncReviewPermission();
+  }, [user?.email]);
+
+  useEffect(() => {
+    if (!userSyncRows.length) {
+      setUserSyncSelectedIds((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    const visibleSet = new Set(
+      userSyncRows
+        .map((row) => Number(row?.contest_user_id))
+        .filter((id) => !Number.isNaN(id) && id > 0)
+    );
+    setUserSyncSelectedIds((prev) => {
+      const next = prev.filter((id) => visibleSet.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [userSyncRows]);
 
   useEffect(() => {
     if (!user) {
@@ -1663,6 +2185,10 @@ function Dashboard({
   }, [myContestPage, myContestTotalPages]);
 
   useEffect(() => {
+    if (userSyncPage > userSyncTotalPages) setUserSyncPage(userSyncTotalPages);
+  }, [userSyncPage, userSyncTotalPages]);
+
+  useEffect(() => {
     localStorage.setItem(
       DASHBOARD_VIEW_STATE_STORAGE_KEY,
       JSON.stringify({
@@ -1674,6 +2200,10 @@ function Dashboard({
         mineKeywordInput,
         mineKeyword,
         minePage,
+        userSyncKeywordInput,
+        userSyncKeyword,
+        userSyncStatus,
+        userSyncPage,
         myContestKeywordInput,
         myContestKeyword,
         myContestPage,
@@ -1705,6 +2235,10 @@ function Dashboard({
     mineKeywordInput,
     mineKeyword,
     minePage,
+    userSyncKeywordInput,
+    userSyncKeyword,
+    userSyncStatus,
+    userSyncPage,
     myContestKeywordInput,
     myContestKeyword,
     myContestPage,
@@ -1753,26 +2287,41 @@ function Dashboard({
     }
   };
 
-  const openEdit = (row) => {
-    setEditTarget(row);
+  const openEdit = async (row) => {
+    const targetId = Number(row?.id);
+    if (Number.isNaN(targetId) || targetId <= 0) return;
+
+    let source = row || {};
+    try {
+      const requestId = createRequestId();
+      const { data: detail, requestId: echoedRequestId } = await getCompetitionById(targetId, { requestId });
+      if (requestId === echoedRequestId && detail) {
+        source = detail;
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorText(error, '加载比赛详情失败，无法进入修改') });
+      return;
+    }
+
+    setEditTarget(source);
     setEditErrors({});
     setEditForm({
       ...EMPTY_FORM,
-      ...row,
-      description: row.description || '',
-      registration_start: toInputDateTime(row.registration_start),
-      registration_end: toInputDateTime(row.registration_end),
-      submission_start: toInputDateTime(row.submission_start),
-      submission_end: toInputDateTime(row.submission_end),
-      review_start: toInputDateTime(row.review_start),
-      review_end: toInputDateTime(row.review_end),
-      participant_limit_mode: 'unlimited',
+      ...source,
+      description: source.description || '',
+      registration_start: toInputDateTime(source.registration_start),
+      registration_end: toInputDateTime(source.registration_end),
+      submission_start: toInputDateTime(source.submission_start),
+      submission_end: toInputDateTime(source.submission_end),
+      review_start: toInputDateTime(source.review_start),
+      review_end: toInputDateTime(source.review_end),
+      participant_limit_mode: normalizeParticipantLimitMode(source.participant_limit_mode),
       school: '',
       major: '',
       grade: '',
-      registration_code_required: registrationCodeRequired(row),
-      allowed_formats: normalizeAllowedFormats(row.allowed_formats),
-      attachment_mode: normalizeAttachmentMode(row.attachment_mode),
+      registration_code_required: registrationCodeRequired(source),
+      allowed_formats: normalizeAllowedFormats(source.allowed_formats),
+      attachment_mode: normalizeAttachmentMode(source.attachment_mode),
     });
     setEditOpen(true);
   };
@@ -2417,8 +2966,15 @@ function Dashboard({
       await loadMine(mineKeyword, minePage);
       await loadHome(homeKeyword, homePage);
     } catch (error) {
-      trackAction('competition_update_failed', { user: user?.email, id: editTarget?.id, reason: getErrorText(error, '修改失败') });
-      setMessage({ type: 'error', text: getErrorText(error, '修改失败') });
+      const reasonText = getErrorText(error, '请稍后重试');
+      const normalizedReason = reasonText === '更新失败'
+        ? '服务端未返回具体原因，请检查输入后重试'
+        : reasonText;
+      trackAction('competition_update_failed', { user: user?.email, id: editTarget?.id, reason: normalizedReason });
+      setMessage({
+        type: 'error',
+        text: `更新失败：${normalizedReason}`,
+      });
     } finally {
       setActionLoading(false);
     }
@@ -2507,6 +3063,22 @@ function Dashboard({
       );
       trackAction('competition_register_success', { user: user?.email, id: targetId });
       setRegisteredCompetitionIds((prev) => normalizeCompetitionIds([...prev, targetId]));
+      setMyParticipantMap((prev) => ({
+        ...prev,
+        [targetId]: prev?.[targetId] || {
+          competition_id: targetId,
+          user_id: Number(user?.id || user?.user_id || 0) || 0,
+          name: String(user?.username || ''),
+          phone: String(user?.phone || ''),
+          email: String(user?.email || ''),
+          study_status: String(user?.study_status || 'not_in_school'),
+          school: String(user?.school || ''),
+          major: String(user?.major || ''),
+          grade: String(user?.grade || ''),
+          occupation: String(user?.occupation || ''),
+          bio: String(user?.bio || ''),
+        },
+      }));
       setMessage({ type: 'success', text: '报名成功' });
       setJoinCodeOpen(false);
       setJoinCodeTarget(null);
@@ -3272,7 +3844,7 @@ function Dashboard({
   const profilePane = (
     <Paper sx={{ p: 3, borderRadius: 4, border: `1px solid ${CONTEST_THEME.panelBorder}`, background: CONTEST_THEME.panelGradient }}>
       <Alert severity="info" sx={{ mb: 2 }}>
-        账号、手机号、邮箱由主平台维护；这里仅可编辑比赛系统资料。
+        账号、手机号、邮箱由主平台维护；如需修改手机号或邮箱，请联系管理员处理。这里仅可编辑比赛系统资料。
       </Alert>
       <Grid2 container spacing={2}>
         <Grid2 size={4}>
@@ -3290,6 +3862,7 @@ function Dashboard({
             size="small"
             label="手机号"
             value={profileValue(profileData?.phone)}
+            helperText="如需修改，请联系管理员"
             slotProps={{ input: { readOnly: true } }}
           />
         </Grid2>
@@ -3299,6 +3872,7 @@ function Dashboard({
             size="small"
             label="邮箱"
             value={profileValue(profileData?.email)}
+            helperText="如需修改，请联系管理员"
             slotProps={{ input: { readOnly: true } }}
           />
         </Grid2>
@@ -3464,6 +4038,233 @@ function Dashboard({
     </Paper>
   );
 
+  const userSyncReviewPane = (
+    <Paper sx={{ p: 3, borderRadius: 4, border: `1px solid ${CONTEST_THEME.panelBorder}`, background: CONTEST_THEME.panelGradient }}>
+      <Alert severity="info" sx={{ mb: 2 }}>
+        仅管理员可审核：只展示“contest 本地注册且已报名、尚未同步到主平台 users”的用户。
+      </Alert>
+      <Alert severity="warning" sx={{ mb: 2 }}>
+        {USER_SYNC_CONFLICT_HINT}
+      </Alert>
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ mb: 2 }}>
+        <TextField
+          fullWidth
+          size="small"
+          label="搜索（用户名/手机号/邮箱/比赛名/创办者）"
+          value={userSyncKeywordInput}
+          onChange={(event) => setUserSyncKeywordInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') searchUserSyncReviews();
+          }}
+        />
+        <FormControl size="small" sx={{ minWidth: 140 }}>
+          <InputLabel>状态</InputLabel>
+          <Select
+            label="状态"
+            value={userSyncStatus}
+            onChange={(event) => changeUserSyncStatus(event.target.value)}
+          >
+            {USER_SYNC_REVIEW_STATUS_OPTIONS.map((item) => (
+              <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <Button variant="contained" onClick={searchUserSyncReviews} disabled={userSyncLoading}>搜索</Button>
+        <Button variant="outlined" onClick={clearUserSyncReviewsSearch} disabled={userSyncLoading}>清空</Button>
+      </Stack>
+      <Stack
+        direction={{ xs: 'column', md: 'row' }}
+        spacing={1}
+        alignItems={{ xs: 'stretch', md: 'center' }}
+        justifyContent="space-between"
+        sx={{ mb: 1.2 }}
+      >
+        <Typography variant="body2" color="text.secondary">
+          已选择 {userSyncSelectedIds.length} 项
+        </Typography>
+        <Stack direction="row" spacing={1} flexWrap="wrap">
+          <Button
+            size="small"
+            variant="contained"
+            startIcon={<CheckCircleRoundedIcon />}
+            disabled={userSyncLoading || !userSyncSelectedIds.length}
+            onClick={() => openUserSyncBatchDecisionDialog('approve')}
+          >
+            批量通过并同步
+          </Button>
+          <Button
+            size="small"
+            variant="outlined"
+            color="warning"
+            startIcon={<CloseRoundedIcon />}
+            disabled={userSyncLoading || !userSyncSelectedIds.length}
+            onClick={() => openUserSyncBatchDecisionDialog('reject')}
+          >
+            批量拒绝
+          </Button>
+          <Button
+            size="small"
+            variant="text"
+            disabled={!userSyncSelectedIds.length}
+            onClick={clearUserSyncSelection}
+          >
+            清空已选
+          </Button>
+        </Stack>
+      </Stack>
+
+      <TableContainer sx={{ border: `1px solid ${CONTEST_THEME.tableBorder}`, borderRadius: 2, minHeight: 420 }}>
+        <Table>
+          <TableHead>
+            <TableRow sx={{ background: CONTEST_THEME.tableHeadBg }}>
+              <TableCell align="center" sx={{ width: 56 }}>
+                <Checkbox
+                  size="small"
+                  checked={userSyncAllCurrentSelected}
+                  indeterminate={userSyncCurrentIndeterminate}
+                  disabled={!userSyncCurrentPageIds.length}
+                  onChange={(event) => {
+                    event.stopPropagation();
+                    toggleUserSyncSelectCurrentPage(event.target.checked);
+                  }}
+                />
+              </TableCell>
+              <TableCell>用户信息</TableCell>
+              <TableCell>在读信息</TableCell>
+              <TableCell>报名上下文</TableCell>
+              <TableCell align="center">审核状态</TableCell>
+              <TableCell align="center">操作</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {userSyncRows.map((row) => {
+              const contestUserId = Number(row?.contest_user_id);
+              const selectable = !Number.isNaN(contestUserId) && contestUserId > 0;
+              const checked = selectable && userSyncSelectedIdSet.has(contestUserId);
+              const studyStatus = normalizeStudyStatus(row?.study_status, row);
+              const competitions = row?.registration_context?.competitions || [];
+              const latestReview = row?.latest_review || null;
+              return (
+                <TableRow
+                  key={`user_sync_${row?.contest_user_id}`}
+                  hover
+                  sx={{ cursor: 'pointer' }}
+                  onClick={() => openUserSyncReview(row)}
+                >
+                  <TableCell align="center" onClick={(event) => event.stopPropagation()}>
+                    <Checkbox
+                      size="small"
+                      checked={checked}
+                      disabled={!selectable}
+                      onChange={(event) => toggleUserSyncRowSelection(contestUserId, event.target.checked)}
+                    />
+                  </TableCell>
+                  <TableCell sx={{ minWidth: 220 }}>
+                    <Typography sx={{ fontWeight: 700 }}>
+                      {profileValue(row?.username)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      邮箱：{profileValue(row?.email)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      手机：{profileValue(row?.phone)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell sx={{ minWidth: 180 }}>
+                    <Typography variant="body2">
+                      在读状态：{studyStatusLabel(studyStatus)}
+                    </Typography>
+                    {studyStatus === 'in_school' ? (
+                      <>
+                        <Typography variant="body2" color="text.secondary">学校：{profileValue(row?.school)}</Typography>
+                        <Typography variant="body2" color="text.secondary">专业：{profileValue(row?.major)}</Typography>
+                        <Typography variant="body2" color="text.secondary">年级：{profileValue(row?.grade)}</Typography>
+                      </>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">职业：{profileValue(row?.occupation)}</Typography>
+                    )}
+                  </TableCell>
+                  <TableCell sx={{ minWidth: 320 }}>
+                    <Typography variant="body2" color="text.secondary">
+                      报名数：{Number(row?.registration_context?.competitions_count || 0)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: competitions.length ? 0.6 : 0 }}>
+                      最近报名：{formatTimeValue(row?.registration_context?.last_registered_at, '-')}
+                    </Typography>
+                    {!!competitions.length && (
+                      <Stack spacing={0.3}>
+                        {competitions.slice(0, 3).map((item) => (
+                          <Typography key={`sync_comp_${row?.contest_user_id}_${item?.competition_id}`} variant="caption" color="text.secondary">
+                            {profileValue(item?.competition_name)} ｜ 创办者：{profileValue(item?.competition_creator_name || item?.competition_creator_email)}
+                          </Typography>
+                        ))}
+                        {competitions.length > 3 && (
+                          <Typography variant="caption" color="text.secondary">... 还有 {competitions.length - 3} 场</Typography>
+                        )}
+                      </Stack>
+                    )}
+                  </TableCell>
+                  <TableCell align="center" sx={{ minWidth: 120 }}>
+                    <Chip
+                      size="small"
+                      color={userSyncReviewStatusColor(row?.review_status)}
+                      label={userSyncReviewStatusLabel(row?.review_status)}
+                    />
+                    {String(row?.review_status || '').trim().toLowerCase() === 'conflict' && (
+                      <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.6 }}>
+                        需人工处理归属冲突
+                      </Typography>
+                    )}
+                    {latestReview && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.6 }}>
+                        最近：{formatTimeValue(latestReview?.created_at, '-')}
+                      </Typography>
+                    )}
+                  </TableCell>
+                  <TableCell align="center" sx={{ minWidth: 160 }}>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openUserSyncReview(row);
+                      }}
+                    >
+                      审核
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+            {!userSyncRows.length && !userSyncLoading && (
+              <TableRow><TableCell align="center" colSpan={6}>暂无待审核用户</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1} sx={{ mt: 1.5 }}>
+        <Typography variant="body2" color="text.secondary">{userSyncPage}/{userSyncTotalPages} 页</Typography>
+        <Button
+          size="small"
+          variant="outlined"
+          disabled={userSyncLoading || userSyncPage <= 1}
+          onClick={() => changeUserSyncPage(userSyncPage - 1)}
+        >
+          上一页
+        </Button>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={userSyncLoading || !userSyncHasNext}
+          onClick={() => changeUserSyncPage(userSyncPage + 1)}
+        >
+          下一页
+        </Button>
+      </Stack>
+    </Paper>
+  );
+
   return (
     <Box sx={{ minHeight: '100vh', p: 2, overflowX: 'auto', background: CONTEST_THEME.pageBg }}>
       <Box sx={{ width: 'calc(100vw - 32px)', maxWidth: 1460, mx: 'auto', display: 'flex', gap: 2 }}>
@@ -3505,6 +4306,7 @@ function Dashboard({
               {tab === 'profile' && profilePane}
               {tab === 'create' && createPane}
               {tab === 'mine' && minePane}
+              {tab === 'user_sync_review' && userSyncReviewPane}
             </>
           )}
         </Box>
@@ -4310,6 +5112,220 @@ function Dashboard({
         </DialogContent>
         <DialogActions>
           <Button onClick={() => { setMyInfoOpen(false); setMyInfoCompetition(null); }}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={userSyncReviewOpen}
+        onClose={(event, reason) => {
+          if (reason === 'backdropClick') {
+            setMessage({ type: 'warning', text: '请先点击“关闭”按钮，再关闭窗口' });
+            return;
+          }
+          closeUserSyncReview();
+        }}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle sx={{ pr: 6 }}>
+          用户同步审核
+          <IconButton
+            aria-label="关闭"
+            onClick={closeUserSyncReview}
+            sx={{ position: 'absolute', right: 8, top: 8 }}
+          >
+            <CloseRoundedIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          {!userSyncReviewTarget ? (
+            <Typography color="text.secondary">暂无审核目标</Typography>
+          ) : (
+            <Stack spacing={1.5}>
+              {String(userSyncReviewTarget?.review_status || '').trim().toLowerCase() === 'conflict' && (
+                <Alert severity="warning">
+                  <Typography sx={{ fontWeight: 700, mb: 0.5 }}>当前状态为“冲突”</Typography>
+                  <Typography variant="body2" sx={{ mb: 0.5 }}>
+                    {USER_SYNC_CONFLICT_HINT}
+                  </Typography>
+                  <Typography variant="body2">
+                    建议先在主平台核对 users 中该手机号/邮箱归属，再回到此处重新执行“通过并同步”。
+                  </Typography>
+                </Alert>
+              )}
+              <Grid2 container spacing={2}>
+                <Grid2 size={6}>
+                  <DetailItem label="用户名" value={userSyncReviewTarget?.username} />
+                  <DetailItem label="手机号" value={userSyncReviewTarget?.phone} />
+                  <DetailItem label="邮箱" value={userSyncReviewTarget?.email} />
+                  <DetailItem
+                    label="在读状态"
+                    value={studyStatusLabel(normalizeStudyStatus(userSyncReviewTarget?.study_status, userSyncReviewTarget || {}))}
+                  />
+                  {normalizeStudyStatus(userSyncReviewTarget?.study_status, userSyncReviewTarget || {}) === 'in_school' ? (
+                    <>
+                      <DetailItem label="学校" value={userSyncReviewTarget?.school} />
+                      <DetailItem label="专业" value={userSyncReviewTarget?.major} />
+                      <DetailItem label="年级" value={userSyncReviewTarget?.grade} />
+                    </>
+                  ) : (
+                    <DetailItem label="职业" value={userSyncReviewTarget?.occupation} />
+                  )}
+                </Grid2>
+                <Grid2 size={6}>
+                  <DetailItem
+                    label="当前审核状态"
+                    value={userSyncReviewStatusLabel(userSyncReviewTarget?.review_status)}
+                  />
+                  <DetailItem
+                    label="报名比赛数"
+                    value={String(Number(userSyncReviewTarget?.registration_context?.competitions_count || 0))}
+                  />
+                  <DetailItem
+                    label="最近报名时间"
+                    value={formatTimeValue(userSyncReviewTarget?.registration_context?.last_registered_at, '-')}
+                  />
+                  <DetailItem
+                    label="报名比赛列表"
+                    value={(userSyncReviewTarget?.registration_context?.competitions || [])
+                      .map((item) => `${profileValue(item?.competition_name)}（创办者：${profileValue(item?.competition_creator_name || item?.competition_creator_email)}）`)
+                      .join('\n')}
+                  />
+                  {!!String(userSyncReviewTarget?.latest_review?.reason || '').trim() && (
+                    <DetailItem label="最近审核说明" value={userSyncReviewTarget?.latest_review?.reason} />
+                  )}
+                </Grid2>
+              </Grid2>
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeUserSyncReview}>关闭</Button>
+          <Button
+            variant="outlined"
+            color="warning"
+            disabled={!userSyncReviewTarget || userSyncDecisionLoading}
+            onClick={() => openUserSyncDecisionDialog('reject')}
+            startIcon={<CloseRoundedIcon />}
+          >
+            拒绝
+          </Button>
+          <Button
+            variant="contained"
+            disabled={!userSyncReviewTarget || userSyncDecisionLoading}
+            onClick={() => openUserSyncDecisionDialog('approve')}
+            startIcon={<CheckCircleRoundedIcon />}
+          >
+            通过并同步
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={userSyncDecisionOpen}
+        onClose={(event, reason) => {
+          if (reason === 'backdropClick') {
+            setMessage({ type: 'warning', text: '请先点击“取消”或“确认提交”按钮，再关闭窗口' });
+            return;
+          }
+          closeUserSyncDecisionDialog();
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>
+          二次确认：{userSyncReviewActionText(userSyncDecisionAction)}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5}>
+            <Alert severity={userSyncDecisionAction === 'reject' ? 'warning' : 'info'}>
+              请确认操作对象：{profileValue(userSyncReviewTarget?.username)}（{profileValue(userSyncReviewTarget?.email)}）
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              请输入确认口令：{USER_SYNC_REVIEW_CONFIRM_TEXT[userSyncDecisionAction]}
+            </Typography>
+            <TextField
+              fullWidth
+              autoFocus
+              label="确认口令"
+              value={userSyncDecisionConfirmText}
+              onChange={(event) => setUserSyncDecisionConfirmText(event.target.value)}
+            />
+            <TextField
+              fullWidth
+              multiline
+              minRows={3}
+              label="审核说明（选填）"
+              value={userSyncDecisionReason}
+              onChange={(event) => setUserSyncDecisionReason(event.target.value)}
+              helperText="可填写审核原因，便于后续追踪。"
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeUserSyncDecisionDialog} disabled={userSyncDecisionLoading}>取消</Button>
+          <Button
+            variant="contained"
+            color={userSyncDecisionAction === 'reject' ? 'warning' : 'primary'}
+            onClick={submitUserSyncDecision}
+            disabled={userSyncDecisionLoading}
+          >
+            {userSyncDecisionLoading ? '提交中...' : '确认提交'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={userSyncBatchDecisionOpen}
+        onClose={(event, reason) => {
+          if (reason === 'backdropClick') {
+            setMessage({ type: 'warning', text: '请先点击“取消”或“确认提交”按钮，再关闭窗口' });
+            return;
+          }
+          closeUserSyncBatchDecisionDialog();
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>
+          批量二次确认：{userSyncReviewActionText(userSyncBatchAction)}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5}>
+            <Alert severity={userSyncBatchAction === 'reject' ? 'warning' : 'info'}>
+              已选择 {userSyncSelectedIds.length} 个用户，将批量执行“{userSyncReviewActionText(userSyncBatchAction)}”。
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              请输入确认口令：{USER_SYNC_REVIEW_CONFIRM_TEXT[userSyncBatchAction]}
+            </Typography>
+            <TextField
+              fullWidth
+              autoFocus
+              label="确认口令"
+              value={userSyncBatchConfirmText}
+              onChange={(event) => setUserSyncBatchConfirmText(event.target.value)}
+            />
+            <TextField
+              fullWidth
+              multiline
+              minRows={3}
+              label="审核说明（选填）"
+              value={userSyncBatchReason}
+              onChange={(event) => setUserSyncBatchReason(event.target.value)}
+              helperText="可填写批量处理原因，便于后续追踪。"
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeUserSyncBatchDecisionDialog} disabled={userSyncBatchDecisionLoading}>取消</Button>
+          <Button
+            variant="contained"
+            color={userSyncBatchAction === 'reject' ? 'warning' : 'primary'}
+            onClick={submitUserSyncBatchDecision}
+            disabled={userSyncBatchDecisionLoading}
+          >
+            {userSyncBatchDecisionLoading ? '提交中...' : '确认提交'}
+          </Button>
         </DialogActions>
       </Dialog>
 

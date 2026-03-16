@@ -39,6 +39,7 @@ export default function App() {
   const createPath = normalizePath(routeConfig.createPath || '/create');
   const minePath = normalizePath(routeConfig.minePath || '/mine');
   const profilePath = normalizePath(routeConfig.profilePath || '/profile');
+  const userSyncReviewPath = normalizePath(routeConfig.userSyncReviewPath || '/user-sync-review');
   const competitionPathPrefix = normalizePath(routeConfig.competitionPathPrefix || '/competitions');
   const competitionRegisterSuffix = String(routeConfig.competitionRegisterSuffix || '/register').trim() || '/register';
   const [locationState, setLocationState] = useState(() => ({
@@ -55,6 +56,7 @@ export default function App() {
       createPath,
       minePath,
       profilePath,
+      userSyncReviewPath,
     ]),
     [
       homePath,
@@ -64,6 +66,7 @@ export default function App() {
       createPath,
       minePath,
       profilePath,
+      userSyncReviewPath,
     ]
   );
 
@@ -112,6 +115,7 @@ export default function App() {
       createPath={createPath}
       minePath={minePath}
       profilePath={profilePath}
+      userSyncReviewPath={userSyncReviewPath}
       competitionPathPrefix={competitionPathPrefix}
       competitionRegisterSuffix={competitionRegisterSuffix}
       onNavigate={navigateReplace}

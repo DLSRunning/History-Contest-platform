@@ -77,6 +77,7 @@ npx playwright install chromium
 - `VITE_CONTEST_CREATE_PATH=${BASE_PATH}/create`
 - `VITE_CONTEST_MINE_PATH=${BASE_PATH}/mine`
 - `VITE_CONTEST_PROFILE_PATH=${BASE_PATH}/profile`
+- `VITE_CONTEST_USER_SYNC_REVIEW_PATH=${BASE_PATH}/user-sync-review`
 - `VITE_CONTEST_COMPETITION_PATH_PREFIX=${BASE_PATH}/competitions`
 - `VITE_CONTEST_COMPETITION_REGISTER_SUFFIX=/register`
 
@@ -135,3 +136,21 @@ server {
 
 - 开发者：`xianyu`
 - 联系邮箱：`2646163045@qq.com`
+
+## 7. 与测试文档对齐的执行命令（增量）
+
+按后端测试需求文档联动执行时，前端侧推荐命令：
+
+```bash
+cd contest_front
+
+# 组件/路由单测
+npm run test
+
+# 浏览器 E2E（用户旅程 + 用户同步审核）
+npm run test:e2e -- e2e/contest-user-journey.spec.js
+```
+
+说明：
+- 需求基线以 `contest/contest模块测试需求文档.md` 为准；
+- 新增前端测试前，先在需求文档登记测试目标、范围、断言与通过标准。

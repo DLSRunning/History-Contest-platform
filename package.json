@@ -8,8 +8,8 @@
     "dev:https": "VITE_DEV_HTTPS=1 vite --host --port 3000",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "vitest run --environment jsdom",
-    "test:watch": "vitest --environment jsdom",
+    "test": "vitest run --environment jsdom src",
+    "test:watch": "vitest --environment jsdom src",
     "test:e2e": "playwright test"
   },
   "dependencies": {

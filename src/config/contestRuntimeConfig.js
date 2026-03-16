@@ -83,6 +83,7 @@ const defaults = {
     createPath: '/create',
     minePath: '/mine',
     profilePath: '/profile',
+    userSyncReviewPath: '/user-sync-review',
     competitionPathPrefix: '/competitions',
     competitionRegisterSuffix: '/register',
   },
@@ -190,6 +191,10 @@ export const contestRuntimeConfig = {
     profilePath: normalizePrefix(
       runtimeOverride?.route?.profilePath || env.VITE_CONTEST_PROFILE_PATH,
       defaults.route.profilePath
+    ),
+    userSyncReviewPath: normalizePrefix(
+      runtimeOverride?.route?.userSyncReviewPath || env.VITE_CONTEST_USER_SYNC_REVIEW_PATH,
+      defaults.route.userSyncReviewPath
     ),
     competitionPathPrefix: normalizePrefix(
       runtimeOverride?.route?.competitionPathPrefix || env.VITE_CONTEST_COMPETITION_PATH_PREFIX,

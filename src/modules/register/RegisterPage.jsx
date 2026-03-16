@@ -5,6 +5,11 @@ import {
   Button,
   Card,
   CardContent,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   InputAdornment,
   MenuItem,
   Stack,
@@ -44,6 +49,8 @@ const STUDY_STATUS_OPTIONS = [
 
 const GRADE_OPTIONS = ['本科生', '研究生', '博士生'];
 const REGISTER_DRAFT_STORAGE_KEY = 'contest_register_draft_v1';
+const EMAIL_REGEX = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
+const DEFAULT_SMS_EXPIRE_SECONDS = 60;
 
 function normalizePhone(phone) {
   return String(phone || '').trim();
@@ -51,6 +58,16 @@ function normalizePhone(phone) {
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
+}
+
+function isValidEmail(email) {
+  return EMAIL_REGEX.test(normalizeEmail(email));
+}
+
+function resolveSmsExpireSeconds(responseData, fallback = DEFAULT_SMS_EXPIRE_SECONDS) {
+  const raw = Number(responseData?.expires_in ?? responseData?.data?.expires_in ?? fallback);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(1, Math.floor(raw));
 }
 
 function normalizePath(path) {
@@ -128,6 +145,8 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
   const [msg, setMsg] = useState({ type: '', content: '' });
   const [codeBtnText, setCodeBtnText] = useState('获取验证码');
   const [codeBtnDisabled, setCodeBtnDisabled] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingPayload, setPendingPayload] = useState(null);
 
   useEffect(() => {
     try {
@@ -181,18 +200,25 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
       setMsg({ type: 'error', content: '请先填写手机号' });
       return;
     }
+    if (email && !isValidEmail(email)) {
+      setMsg({ type: 'error', content: '邮箱格式不正确，请检查后重试' });
+      return;
+    }
 
     try {
       setCodeBtnDisabled(true);
       const payload = email ? { phone, email } : { phone };
       const res = await sendSignUpVerificationCode(payload);
+      const expireSeconds = resolveSmsExpireSeconds(res);
       const debugCode = String(res?.debug_code || res?.data?.debug_code || '').trim();
       setMsg({
         type: 'success',
-        content: debugCode ? `验证码已发送（调试码：${debugCode}）` : `验证码已发送至 ${phone}`,
+        content: debugCode
+          ? `验证码已发送（调试码：${debugCode}，${expireSeconds}秒内有效）`
+          : `验证码已发送至 ${phone}（${expireSeconds}秒内有效）`,
       });
 
-      let left = 60;
+      let left = expireSeconds;
       setCodeBtnText(`${left}秒后重试`);
       const timer = setInterval(() => {
         left -= 1;
@@ -207,6 +233,31 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
       setMsg({ type: 'error', content: error.message });
       setCodeBtnDisabled(false);
       setCodeBtnText('获取验证码');
+    }
+  };
+
+  const submitRegister = async (payload) => {
+    setLoading(true);
+    try {
+      await submitSignUp(payload);
+      const currentUser = await getCurrentUserProfile();
+      try {
+        window.sessionStorage.removeItem(REGISTER_DRAFT_STORAGE_KEY);
+      } catch {
+        // ignore clear draft errors
+      }
+      setMsg({ type: 'success', content: '注册成功，正在进入系统...' });
+      setTimeout(() => {
+        if (typeof onSuccess === 'function') {
+          onSuccess(currentUser || null, postSignUpTarget);
+          return;
+        }
+        goTo(postSignUpTarget);
+      }, 300);
+    } catch (error) {
+      setMsg({ type: 'error', content: error.message });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -231,6 +282,10 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
       setMsg({ type: 'error', content: '请完整填写注册信息' });
       return;
     }
+    if (!isValidEmail(payload.email)) {
+      setMsg({ type: 'error', content: '邮箱格式不正确，请检查后重试' });
+      return;
+    }
     if (payload.study_status === 'in_school' && (!payload.school || !payload.major || !payload.grade)) {
       setMsg({ type: 'error', content: '在读用户需填写学校、专业、年级' });
       return;
@@ -245,28 +300,21 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
       payload.grade = '';
     }
 
-    setLoading(true);
-    try {
-      await submitSignUp(payload);
-      const currentUser = await getCurrentUserProfile();
-      try {
-        window.sessionStorage.removeItem(REGISTER_DRAFT_STORAGE_KEY);
-      } catch {
-        // ignore clear draft errors
-      }
-      setMsg({ type: 'success', content: '注册成功，正在进入系统...' });
-      setTimeout(() => {
-        if (typeof onSuccess === 'function') {
-          onSuccess(currentUser || null, postSignUpTarget);
-          return;
-        }
-        goTo(postSignUpTarget);
-      }, 300);
-    } catch (error) {
-      setMsg({ type: 'error', content: error.message });
-    } finally {
-      setLoading(false);
-    }
+    setPendingPayload(payload);
+    setConfirmOpen(true);
+  };
+
+  const closeConfirmDialog = () => {
+    if (loading) return;
+    setConfirmOpen(false);
+    setPendingPayload(null);
+  };
+
+  const confirmRegister = async () => {
+    if (!pendingPayload || loading) return;
+    setConfirmOpen(false);
+    await submitRegister(pendingPayload);
+    setPendingPayload(null);
   };
 
   return (
@@ -348,6 +396,7 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
                 />
                 <TextField
                   label="邮箱*"
+                  type="email"
                   placeholder="your@email.com"
                   value={formData.email}
                   onChange={set('email')}
@@ -452,6 +501,33 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
           </Stack>
         </CardContent>
       </Card>
+      <Dialog
+        open={confirmOpen}
+        onClose={closeConfirmDialog}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>确认注册信息</DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 1 }}>
+            请确认手机号与邮箱。注册后当前版本暂不支持修改这两项信息。
+          </DialogContentText>
+          <Typography sx={{ color: '#1f2b41', fontSize: 14, lineHeight: 1.8 }}>
+            手机号：{pendingPayload?.phone || '-'}
+          </Typography>
+          <Typography sx={{ color: '#1f2b41', fontSize: 14, lineHeight: 1.8 }}>
+            邮箱：{pendingPayload?.email || '-'}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={closeConfirmDialog} disabled={loading}>
+            返回修改
+          </Button>
+          <Button onClick={confirmRegister} variant="contained" disabled={loading}>
+            {loading ? '注册中...' : '确认注册'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

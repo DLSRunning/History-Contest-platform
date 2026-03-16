@@ -72,11 +72,21 @@ function normalizeAttachmentMode(value) {
   return String(value || '').trim().toLowerCase() === 'multiple' ? 'multiple' : 'single';
 }
 
+function normalizeParticipantLimitMode(value) {
+  return String(value || '').trim().toLowerCase() === 'in_school' ? 'in_school' : 'unlimited';
+}
+
 function competitionLimitText(item) {
-  if (item?.registration_code_required === true || Number(item?.registration_code_required) === 1) {
-    return '报名码限制';
+  const parts = [];
+  if (normalizeParticipantLimitMode(item?.participant_limit_mode) === 'in_school') {
+    parts.push('仅在校生');
   }
-  return String(item?.registration_code || '').trim() ? '报名码限制' : '无限制';
+  if (item?.registration_code_required === true || Number(item?.registration_code_required) === 1) {
+    parts.push('邀请码');
+  } else if (String(item?.registration_code || '').trim()) {
+    parts.push('邀请码');
+  }
+  return parts.length ? parts.join(' + ') : '无限制';
 }
 
 function competitionAttachmentText(item) {
@@ -92,6 +102,10 @@ function canQuitCompetition(item) {
   const subStart = dayjs(item.submission_start);
   if (!subStart.isValid()) return false;
   return Date.now() < subStart.valueOf();
+}
+
+function normalizeCompetitionIds(ids = []) {
+  return [...new Set((ids || []).map((id) => Number(id)).filter((id) => !Number.isNaN(id)))];
 }
 
 function DetailItem({ label, value }) {
@@ -144,11 +158,16 @@ export default function CompetitionEntryPage({
   };
 
   const loadRegisteredStatus = async () => {
-    const rows = await listParticipants({ requestId: createRequestId() });
-    const ids = (rows || [])
-      .map((item) => Number(item?.competition_id))
-      .filter((id) => !Number.isNaN(id));
-    setRegisteredCompetitionIds([...new Set(ids)]);
+    try {
+      const rows = await listParticipants({ requestId: createRequestId() });
+      const ids = (rows || [])
+        .map((item) => Number(item?.competition_id))
+        .filter((id) => !Number.isNaN(id));
+      setRegisteredCompetitionIds(normalizeCompetitionIds(ids));
+    } catch (error) {
+      // 保留已有状态，避免状态查询失败把“已报名”误回退为“未报名”
+      showError(error, '加载报名状态失败');
+    }
   };
 
   const reloadAll = async () => {
@@ -204,6 +223,7 @@ export default function CompetitionEntryPage({
         },
         { requestId: createRequestId() },
       );
+      setRegisteredCompetitionIds((prev) => normalizeCompetitionIds([...(prev || []), normalizedCompetitionId]));
       if (typeof setMessage === 'function') {
         setMessage({ type: 'success', text: '报名成功' });
       }

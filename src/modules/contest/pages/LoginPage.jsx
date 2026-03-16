@@ -29,6 +29,13 @@ const INPUT_SX = {
     color: '#445175',
   },
 };
+const DEFAULT_SMS_EXPIRE_SECONDS = 60;
+
+function resolveSmsExpireSeconds(responseData, fallback = DEFAULT_SMS_EXPIRE_SECONDS) {
+  const raw = Number(responseData?.expires_in ?? responseData?.data?.expires_in ?? fallback);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(1, Math.floor(raw));
+}
 
 function DividerWithText({ text = '或者' }) {
   return (
@@ -107,12 +114,13 @@ export default function LoginPage({ onSuccess, setMessage, registerUrl = '', onN
     setSmsCodeSending(true);
     try {
       const resp = await sendSmsLoginCode(normalizedPhone);
+      const expireSeconds = resolveSmsExpireSeconds(resp);
       const debugCode = String(resp?.debug_code || resp?.data?.debug_code || '').trim();
       setMessage({
         type: 'success',
         text: debugCode
-          ? `验证码已发送（调试码：${debugCode}）`
-          : `验证码已发送至 ${normalizedPhone}`,
+          ? `验证码已发送（调试码：${debugCode}，${expireSeconds}秒内有效）`
+          : `验证码已发送至 ${normalizedPhone}（${expireSeconds}秒内有效）`,
       });
     } catch (error) {
       setMessage({ type: 'error', text: getUserFriendlyErrorText(error, '验证码发送失败，请稍后重试') });
