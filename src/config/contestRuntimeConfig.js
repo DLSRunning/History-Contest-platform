@@ -83,6 +83,7 @@ const defaults = {
     createPath: '/create',
     minePath: '/mine',
     profilePath: '/profile',
+    judgeReviewsPath: '/judge-reviews',
     userSyncReviewPath: '/user-sync-review',
     competitionPathPrefix: '/competitions',
     competitionRegisterSuffix: '/register',
@@ -191,6 +192,10 @@ export const contestRuntimeConfig = {
     profilePath: normalizePrefix(
       runtimeOverride?.route?.profilePath || env.VITE_CONTEST_PROFILE_PATH,
       defaults.route.profilePath
+    ),
+    judgeReviewsPath: normalizePrefix(
+      runtimeOverride?.route?.judgeReviewsPath || env.VITE_CONTEST_JUDGE_REVIEWS_PATH,
+      defaults.route.judgeReviewsPath
     ),
     userSyncReviewPath: normalizePrefix(
       runtimeOverride?.route?.userSyncReviewPath || env.VITE_CONTEST_USER_SYNC_REVIEW_PATH,

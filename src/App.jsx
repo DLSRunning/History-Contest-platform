@@ -30,6 +30,12 @@ function isCompetitionPath(pathname, competitionPathPrefix, competitionRegisterS
   return reg.test(String(pathname || ''));
 }
 
+function isJudgeReviewPath(pathname, judgeReviewsPath = '/judge-reviews') {
+  const escapedPrefix = String(judgeReviewsPath || '/judge-reviews').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const reg = new RegExp(`^${escapedPrefix}/\\d+$`);
+  return reg.test(String(pathname || ''));
+}
+
 export default function App() {
   const routeConfig = contestRuntimeConfig.route || {};
   const loginPathPrefix = normalizePath(routeConfig.loginPathPrefix || '/login');
@@ -39,6 +45,7 @@ export default function App() {
   const createPath = normalizePath(routeConfig.createPath || '/create');
   const minePath = normalizePath(routeConfig.minePath || '/mine');
   const profilePath = normalizePath(routeConfig.profilePath || '/profile');
+  const judgeReviewsPath = normalizePath(routeConfig.judgeReviewsPath || '/judge-reviews');
   const userSyncReviewPath = normalizePath(routeConfig.userSyncReviewPath || '/user-sync-review');
   const competitionPathPrefix = normalizePath(routeConfig.competitionPathPrefix || '/competitions');
   const competitionRegisterSuffix = String(routeConfig.competitionRegisterSuffix || '/register').trim() || '/register';
@@ -56,6 +63,7 @@ export default function App() {
       createPath,
       minePath,
       profilePath,
+      judgeReviewsPath,
       userSyncReviewPath,
     ]),
     [
@@ -66,20 +74,27 @@ export default function App() {
       createPath,
       minePath,
       profilePath,
+      judgeReviewsPath,
       userSyncReviewPath,
     ]
   );
 
   const isAllowedPath = useCallback((pathname) => {
     if (allowedStaticPaths.has(pathname)) return true;
+    if (isJudgeReviewPath(pathname, judgeReviewsPath)) return true;
     return isCompetitionPath(pathname, competitionPathPrefix, competitionRegisterSuffix);
-  }, [allowedStaticPaths, competitionPathPrefix, competitionRegisterSuffix]);
+  }, [allowedStaticPaths, competitionPathPrefix, competitionRegisterSuffix, judgeReviewsPath]);
 
-  const navigateReplace = useCallback((targetPath) => {
+  const navigate = useCallback((targetPath, options = {}) => {
     const next = parseTargetLocation(targetPath);
+    const replace = Boolean(options && options.replace);
     setLocationState((prev) => {
       if (prev.pathname === next.pathname && prev.search === next.search) return prev;
-      window.history.replaceState({}, '', `${next.pathname}${next.search}`);
+      if (replace) {
+        window.history.replaceState({}, '', `${next.pathname}${next.search}`);
+      } else {
+        window.history.pushState({}, '', `${next.pathname}${next.search}`);
+      }
       return next;
     });
   }, []);
@@ -100,9 +115,9 @@ export default function App() {
 
   useEffect(() => {
     if (!isAllowedPath(pathname)) {
-      navigateReplace(homePath);
+      navigate(homePath, { replace: true });
     }
-  }, [homePath, isAllowedPath, navigateReplace, pathname]);
+  }, [homePath, isAllowedPath, navigate, pathname]);
 
   return (
     <ContestApp
@@ -115,10 +130,11 @@ export default function App() {
       createPath={createPath}
       minePath={minePath}
       profilePath={profilePath}
+      judgeReviewsPath={judgeReviewsPath}
       userSyncReviewPath={userSyncReviewPath}
       competitionPathPrefix={competitionPathPrefix}
       competitionRegisterSuffix={competitionRegisterSuffix}
-      onNavigate={navigateReplace}
+      onNavigate={navigate}
     />
   );
 }

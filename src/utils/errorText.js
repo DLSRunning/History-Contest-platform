@@ -39,14 +39,20 @@ function mapTechnicalTextToChinese(text, fallback) {
 function sanitizeForUser(text, fallback) {
   const raw = String(text || '').trim();
   if (!raw) return fallback;
-  if (CHINESE_TEXT_RE.test(raw)) return raw;
+  // 去掉前缀错误码/异常名，只保留用户可读正文
+  const cleaned = raw
+    .replace(/^(http(exception|error)\s*[:：]\s*)/i, '')
+    .replace(/^(\d{3}\s*[:：]\s*)+/, '')
+    .trim();
+  if (!cleaned) return fallback;
+  if (CHINESE_TEXT_RE.test(cleaned)) return cleaned;
 
-  const mapped = mapTechnicalTextToChinese(raw, fallback);
+  const mapped = mapTechnicalTextToChinese(cleaned, fallback);
   if (mapped) return mapped;
 
-  if (/^\d{3}(\D|$)/.test(raw)) return fallback;
-  if (/^[A-Z0-9_.-]{3,}$/.test(raw)) return fallback;
-  if (/[a-z]/i.test(raw)) return fallback;
+  if (/^\d{3}(\D|$)/.test(cleaned)) return fallback;
+  if (/^[A-Z0-9_.-]{3,}$/.test(cleaned)) return fallback;
+  if (/[a-z]/i.test(cleaned)) return fallback;
   return fallback;
 }
 

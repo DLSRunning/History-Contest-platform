@@ -11,6 +11,7 @@ import { clearClientAuthState, getCurrentUser, logout as logoutApi } from '../..
 import { contestRuntimeConfig, getHostAuthAdapter } from '../../config/contestRuntimeConfig';
 import { getUserFriendlyErrorText } from '../../utils/errorText';
 import DashboardPage, { DASHBOARD_VIEW_STATE_STORAGE_KEY } from './pages/DashboardPage';
+import JudgeReviewPage from './pages/JudgeReviewPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from '../register/RegisterPage';
 
@@ -71,6 +72,22 @@ function parseCompetitionPath(path, competitionPathPrefix = '/competitions', com
   const id = Number(matched[1]);
   if (Number.isNaN(id) || id <= 0) return null;
   return { competitionId: id };
+}
+
+function isJudgeReviewPath(path, judgeReviewsPath = '/judge-reviews') {
+  const escapedPrefix = String(judgeReviewsPath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const reg = new RegExp(`^${escapedPrefix}/\\d+$`);
+  return reg.test(String(path || ''));
+}
+
+function parseJudgeReviewPath(path, judgeReviewsPath = '/judge-reviews') {
+  const escapedPrefix = String(judgeReviewsPath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const reg = new RegExp(`^${escapedPrefix}/(\\d+)$`);
+  const matched = String(path || '').match(reg);
+  if (!matched) return null;
+  const competitionId = Number(matched[1]);
+  if (Number.isNaN(competitionId) || competitionId <= 0) return null;
+  return { competitionId };
 }
 
 function buildPathWithNext(basePath, nextPath = '') {
@@ -139,6 +156,7 @@ export default function ContestApp({
   createPath = '/create',
   minePath = '/mine',
   profilePath = '/profile',
+  judgeReviewsPath = '/judge-reviews',
   userSyncReviewPath = '/user-sync-review',
   competitionPathPrefix = '/competitions',
   competitionRegisterSuffix = '/register',
@@ -160,6 +178,7 @@ export default function ContestApp({
   const normalizedCreatePath = normalizePath(createPath);
   const normalizedMinePath = normalizePath(minePath);
   const normalizedProfilePath = normalizePath(profilePath);
+  const normalizedJudgeReviewsPath = normalizePath(judgeReviewsPath);
   const normalizedUserSyncReviewPath = normalizePath(userSyncReviewPath);
   const normalizedCompetitionPathPrefix = normalizePath(competitionPathPrefix);
   const competitionRegisterPathSuffix = String(competitionRegisterSuffix || '/register').trim() || '/register';
@@ -170,6 +189,7 @@ export default function ContestApp({
       [normalizedCreatePath]: 'create',
       [normalizedMinePath]: 'mine',
       [normalizedProfilePath]: 'profile',
+      [normalizedJudgeReviewsPath]: 'judge_reviews',
       [normalizedUserSyncReviewPath]: 'user_sync_review',
     }),
     [
@@ -178,6 +198,7 @@ export default function ContestApp({
       normalizedCreatePath,
       normalizedMinePath,
       normalizedProfilePath,
+      normalizedJudgeReviewsPath,
       normalizedUserSyncReviewPath,
     ]
   );
@@ -188,6 +209,7 @@ export default function ContestApp({
       create: normalizedCreatePath,
       mine: normalizedMinePath,
       profile: normalizedProfilePath,
+      judge_reviews: normalizedJudgeReviewsPath,
       user_sync_review: normalizedUserSyncReviewPath,
     }),
     [
@@ -196,6 +218,7 @@ export default function ContestApp({
       normalizedCreatePath,
       normalizedMinePath,
       normalizedProfilePath,
+      normalizedJudgeReviewsPath,
       normalizedUserSyncReviewPath,
     ]
   );
@@ -204,9 +227,11 @@ export default function ContestApp({
       const normalized = normalizePath(path);
       if (normalized === normalizedLoginPath || normalized === normalizedRegisterPath) return true;
       if (Object.keys(staticPathToTab).includes(normalized)) return true;
+      if (isJudgeReviewPath(normalized, normalizedJudgeReviewsPath)) return true;
       return isCompetitionPath(normalized, normalizedCompetitionPathPrefix, competitionRegisterPathSuffix);
     },
     [
+      normalizedJudgeReviewsPath,
       normalizedCompetitionPathPrefix,
       competitionRegisterPathSuffix,
       normalizedLoginPath,
@@ -219,6 +244,7 @@ export default function ContestApp({
     normalizedCompetitionPathPrefix,
     competitionRegisterPathSuffix
   );
+  const judgeReviewRoute = parseJudgeReviewPath(currentPath, normalizedJudgeReviewsPath);
   const autoOpenCompetitionId = useMemo(() => {
     if (currentPath !== normalizedHomePath) return 0;
     const params = new URLSearchParams(String(currentSearch || '').replace(/^\?/, ''));
@@ -233,9 +259,9 @@ export default function ContestApp({
   const clearUser = useCallback(() => {
     setUser((prev) => (prev ? null : prev));
   }, []);
-  const navigateTo = useCallback((targetPath) => {
+  const navigateTo = useCallback((targetPath, options = {}) => {
     if (typeof onNavigate === 'function') {
-      onNavigate(targetPath);
+      onNavigate(targetPath, options);
       return;
     }
     window.location.href = targetPath;
@@ -248,13 +274,24 @@ export default function ContestApp({
     },
     [tabToPath, normalizedHomePath, currentPath, navigateTo]
   );
+  const handleOpenJudgeReviewCompetition = useCallback(
+    (competitionId) => {
+      const id = Number(competitionId || 0);
+      if (Number.isNaN(id) || id <= 0) return;
+      const target = `${normalizedJudgeReviewsPath}/${id}`;
+      if (`${currentPath}${currentSearch}` !== target) {
+        navigateTo(target);
+      }
+    },
+    [normalizedJudgeReviewsPath, currentPath, currentSearch, navigateTo]
+  );
   const handleAutoOpenCompetitionHandled = useCallback(() => {
     if (currentPath !== normalizedHomePath) return;
     const params = new URLSearchParams(String(currentSearch || '').replace(/^\?/, ''));
     if (!params.has('open_competition_id')) return;
     params.delete('open_competition_id');
     const remain = params.toString();
-    navigateTo(`${normalizedHomePath}${remain ? `?${remain}` : ''}`);
+    navigateTo(`${normalizedHomePath}${remain ? `?${remain}` : ''}`, { replace: true });
   }, [currentPath, currentSearch, navigateTo, normalizedHomePath]);
 
   useEffect(() => {
@@ -331,12 +368,12 @@ export default function ContestApp({
     const safeNext = resolveSafeNextPath(currentSearch, isRoutablePath);
 
     if (!isRoutablePath(currentPath)) {
-      navigateTo(user ? normalizedHomePath : buildPathWithNext(normalizedLoginPath, normalizedHomePath));
+      navigateTo(user ? normalizedHomePath : buildPathWithNext(normalizedLoginPath, normalizedHomePath), { replace: true });
       return;
     }
 
     if (!user && !isAuthPage) {
-      navigateTo(buildPathWithNext(normalizedLoginPath, `${currentPath}${currentSearch}`));
+      navigateTo(buildPathWithNext(normalizedLoginPath, `${currentPath}${currentSearch}`), { replace: true });
       return;
     }
 
@@ -346,13 +383,13 @@ export default function ContestApp({
         competitionRoute.competitionId
       );
       if (`${currentPath}${currentSearch}` !== targetPath) {
-        navigateTo(targetPath);
+        navigateTo(targetPath, { replace: true });
       }
       return;
     }
 
     if (user && isAuthPage) {
-      navigateTo(safeNext || normalizedHomePath);
+      navigateTo(safeNext || normalizedHomePath, { replace: true });
     }
   }, [
     authLoading,
@@ -480,10 +517,16 @@ export default function ContestApp({
         <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
           <CircularProgress />
         </Box>
+      ) : judgeReviewRoute ? (
+        <JudgeReviewPage
+          competitionId={judgeReviewRoute.competitionId}
+          setMessage={setMessage}
+        />
       ) : (
         <DashboardPage
           routeTab={staticPathToTab[currentPath] || 'home'}
           onRouteChange={handleDashboardRouteChange}
+          onOpenJudgeReviewCompetition={handleOpenJudgeReviewCompetition}
           competitionPathPrefix={normalizedCompetitionPathPrefix}
           competitionRegisterSuffix={competitionRegisterPathSuffix}
           autoOpenCompetitionId={autoOpenCompetitionId}

@@ -17,7 +17,6 @@ import {
   Grid2,
   IconButton,
   InputLabel,
-  LinearProgress,
   Menu,
   MenuItem,
   Paper,
@@ -37,12 +36,14 @@ import AddCircleOutlineRoundedIcon from '@mui/icons-material/AddCircleOutlineRou
 import EditNoteRoundedIcon from '@mui/icons-material/EditNoteRounded';
 import HowToRegRoundedIcon from '@mui/icons-material/HowToRegRounded';
 import PersonRoundedIcon from '@mui/icons-material/PersonRounded';
+import RateReviewRoundedIcon from '@mui/icons-material/RateReviewRounded';
 import AdminPanelSettingsRoundedIcon from '@mui/icons-material/AdminPanelSettingsRounded';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import InsertDriveFileRoundedIcon from '@mui/icons-material/InsertDriveFileRounded';
 import dayjs from 'dayjs';
 import {
+  addCompetitionJudge,
   createCompetition,
   createRequestId,
   createSubmission,
@@ -52,9 +53,11 @@ import {
   getCompetitionById,
   getCreatePermission,
   getMySubmissionAttachmentBlob,
+  listMyJudgeCompetitionsPaged,
   getMySubmissionDetail,
   getUserSyncReviewPermission,
   listCompetitionParticipantsStatusPaged,
+  listCompetitionJudgesPaged,
   listCompetitionsPaged,
   listMyCompetitionsPaged,
   listMyRegisteredCompetitionsPaged,
@@ -64,6 +67,7 @@ import {
   registerParticipant,
   resubmitSubmission,
   unregisterParticipant,
+  updateCompetitionJudgeStatus,
   updateCurrentUserProfile,
   updateCompetition,
   uploadSubmissionAttachment,
@@ -77,6 +81,7 @@ const SUBMISSION_ATTACHMENT_ENDPOINT = `${CONTEST_API_PREFIX}/submissions/my/att
 const BASE_NAV_ITEMS = [
   { key: 'home', label: '首页', icon: <HomeRoundedIcon fontSize="small" /> },
   { key: 'my_contests', label: '我的比赛', icon: <HowToRegRoundedIcon fontSize="small" /> },
+  { key: 'judge_reviews', label: '我评审的比赛', icon: <RateReviewRoundedIcon fontSize="small" /> },
   { key: 'create', label: '创办比赛', icon: <AddCircleOutlineRoundedIcon fontSize="small" /> },
   { key: 'mine', label: '我创办的比赛', icon: <EditNoteRoundedIcon fontSize="small" /> },
   { key: 'profile', label: '个人信息', icon: <PersonRoundedIcon fontSize="small" /> },
@@ -90,6 +95,7 @@ const ALL_NAV_ITEMS = [...BASE_NAV_ITEMS, USER_SYNC_REVIEW_NAV_ITEM];
 export const DASHBOARD_VIEW_STATE_STORAGE_KEY = 'competition_dashboard_view_state';
 const PAGE_SIZE = 7;
 const PARTICIPANTS_PAGE_SIZE = 20;
+const JUDGE_PAGE_SIZE = 10;
 const EMPTY_SUBMISSION_FORM = {
   title: '',
   work_description: '无',
@@ -488,6 +494,11 @@ function userSyncReviewStatusColor(status) {
   if (normalized === 'rejected') return 'warning';
   if (normalized === 'conflict') return 'error';
   return 'info';
+}
+
+function judgeStatusLabel(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  return normalized === 'disabled' ? '停用' : '启用';
 }
 
 function userSyncReviewActionText(action) {
@@ -1222,6 +1233,7 @@ function Dashboard({
   setMessage,
   routeTab = 'home',
   onRouteChange,
+  onOpenJudgeReviewCompetition,
   competitionPathPrefix = '/competitions',
   competitionRegisterSuffix = '/register',
   autoOpenCompetitionId = 0,
@@ -1243,6 +1255,7 @@ function Dashboard({
   const [homeLoading, setHomeLoading] = useState(false);
   const [mineLoading, setMineLoading] = useState(false);
   const [myContestsLoading, setMyContestsLoading] = useState(false);
+  const [judgeReviewsLoading, setJudgeReviewsLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [canCreateCompetition, setCanCreateCompetition] = useState(false);
@@ -1250,6 +1263,7 @@ function Dashboard({
   const [homeRows, setHomeRows] = useState([]);
   const [mineRows, setMineRows] = useState([]);
   const [myContestRows, setMyContestRows] = useState([]);
+  const [judgeCompetitionRows, setJudgeCompetitionRows] = useState([]);
   const [registeredCompetitionIds, setRegisteredCompetitionIds] = useState([]);
   const [myParticipantMap, setMyParticipantMap] = useState({});
   const [submittedCompetitionMap, setSubmittedCompetitionMap] = useState({});
@@ -1268,6 +1282,11 @@ function Dashboard({
   const [myContestPage, setMyContestPage] = useState(() => Math.max(1, Number(persistedViewState.myContestPage || 1)));
   const [myContestHasNext, setMyContestHasNext] = useState(false);
   const [myContestTotalPages, setMyContestTotalPages] = useState(1);
+  const [judgeReviewsKeywordInput, setJudgeReviewsKeywordInput] = useState(() => String(persistedViewState.judgeReviewsKeywordInput || ''));
+  const [judgeReviewsKeyword, setJudgeReviewsKeyword] = useState(() => String(persistedViewState.judgeReviewsKeyword || ''));
+  const [judgeReviewsPage, setJudgeReviewsPage] = useState(() => Math.max(1, Number(persistedViewState.judgeReviewsPage || 1)));
+  const [judgeReviewsHasNext, setJudgeReviewsHasNext] = useState(false);
+  const [judgeReviewsTotalPages, setJudgeReviewsTotalPages] = useState(1);
   const [profileData, setProfileData] = useState(() => user || null);
   const [profileForm, setProfileForm] = useState(() => buildProfileFormFromUser(user));
   const [profileEditing, setProfileEditing] = useState(false);
@@ -1356,16 +1375,32 @@ function Dashboard({
   const [participantsHasNext, setParticipantsHasNext] = useState(false);
   const [participantsTotalPages, setParticipantsTotalPages] = useState(1);
   const [participantsExporting, setParticipantsExporting] = useState(false);
+  const [judgeOpen, setJudgeOpen] = useState(false);
+  const [judgeLoading, setJudgeLoading] = useState(false);
+  const [judgeSubmitting, setJudgeSubmitting] = useState(false);
+  const [judgeTarget, setJudgeTarget] = useState(null);
+  const [judgeRows, setJudgeRows] = useState([]);
+  const [judgeKeywordInput, setJudgeKeywordInput] = useState('');
+  const [judgeKeyword, setJudgeKeyword] = useState('');
+  const [judgeStatus, setJudgeStatus] = useState('all');
+  const [judgePage, setJudgePage] = useState(1);
+  const [judgeHasNext, setJudgeHasNext] = useState(false);
+  const [judgeTotalPages, setJudgeTotalPages] = useState(1);
+  const [judgeAccount, setJudgeAccount] = useState('');
+  const [judgeAddConfirmOpen, setJudgeAddConfirmOpen] = useState(false);
+  const [judgeAddConfirmAccount, setJudgeAddConfirmAccount] = useState('');
   const [myInfoOpen, setMyInfoOpen] = useState(false);
   const [myInfoCompetition, setMyInfoCompetition] = useState(null);
   const latestRequestIdsRef = useRef({
     home: '',
     mine: '',
     myContests: '',
+    judgeReviews: '',
     userSync: '',
     detail: '',
     submission: '',
     participants: '',
+    judges: '',
   });
   const autoOpenedDetailRef = useRef('');
   const detailRegistered = useMemo(() => {
@@ -1584,6 +1619,7 @@ function Dashboard({
     (tab === 'home' && homeLoading) ||
     (tab === 'mine' && mineLoading) ||
     (tab === 'my_contests' && myContestsLoading) ||
+    (tab === 'judge_reviews' && judgeReviewsLoading) ||
     (tab === 'user_sync_review' && userSyncLoading);
 
   const buildCompetitionPath = (competitionId, mode = 'detail') => {
@@ -1678,6 +1714,33 @@ function Dashboard({
       setMessage({ type: 'error', text: getErrorText(error, '加载我的比赛失败') });
     } finally {
       if (latestRequestIdsRef.current.myContests === requestId) setMyContestsLoading(false);
+    }
+  };
+
+  const loadJudgeReviews = async (keyword = judgeReviewsKeyword, page = judgeReviewsPage) => {
+    const requestId = createRequestId();
+    latestRequestIdsRef.current.judgeReviews = requestId;
+    setJudgeReviewsLoading(true);
+    try {
+      const offset = (Math.max(1, page) - 1) * PAGE_SIZE;
+      const { items, total, requestId: echoedRequestId } = await listMyJudgeCompetitionsPaged(
+        PAGE_SIZE,
+        offset,
+        keyword,
+        { requestId }
+      );
+      if (latestRequestIdsRef.current.judgeReviews !== echoedRequestId) return;
+      const totalPages = Math.max(1, Math.ceil((Number(total) || 0) / PAGE_SIZE));
+      setJudgeReviewsTotalPages(totalPages);
+      setJudgeReviewsHasNext(page < totalPages);
+      setJudgeCompetitionRows(items);
+    } catch (error) {
+      if (latestRequestIdsRef.current.judgeReviews !== requestId) return;
+      setJudgeReviewsHasNext(false);
+      setJudgeReviewsTotalPages(1);
+      setMessage({ type: 'error', text: getErrorText(error, '加载我评审的比赛失败') });
+    } finally {
+      if (latestRequestIdsRef.current.judgeReviews === requestId) setJudgeReviewsLoading(false);
     }
   };
 
@@ -2054,6 +2117,7 @@ function Dashboard({
     if (tab === 'home') loadHome(homeKeyword, homePage);
     if (!user) return;
     if (tab === 'my_contests') loadMyContests(myContestKeyword, myContestPage);
+    if (tab === 'judge_reviews') loadJudgeReviews(judgeReviewsKeyword, judgeReviewsPage);
     if (tab === 'mine' && canCreateCompetition) loadMine(mineKeyword, minePage);
     if (tab === 'user_sync_review') loadUserSyncReviews(userSyncKeyword, userSyncPage, userSyncStatus);
   }, [
@@ -2064,6 +2128,8 @@ function Dashboard({
     minePage,
     myContestKeyword,
     myContestPage,
+    judgeReviewsKeyword,
+    judgeReviewsPage,
     userSyncKeyword,
     userSyncPage,
     userSyncStatus,
@@ -2185,6 +2251,10 @@ function Dashboard({
   }, [myContestPage, myContestTotalPages]);
 
   useEffect(() => {
+    if (judgeReviewsPage > judgeReviewsTotalPages) setJudgeReviewsPage(judgeReviewsTotalPages);
+  }, [judgeReviewsPage, judgeReviewsTotalPages]);
+
+  useEffect(() => {
     if (userSyncPage > userSyncTotalPages) setUserSyncPage(userSyncTotalPages);
   }, [userSyncPage, userSyncTotalPages]);
 
@@ -2207,6 +2277,9 @@ function Dashboard({
         myContestKeywordInput,
         myContestKeyword,
         myContestPage,
+        judgeReviewsKeywordInput,
+        judgeReviewsKeyword,
+        judgeReviewsPage,
         editOpen,
         editTarget,
         editForm,
@@ -2242,6 +2315,9 @@ function Dashboard({
     myContestKeywordInput,
     myContestKeyword,
     myContestPage,
+    judgeReviewsKeywordInput,
+    judgeReviewsKeyword,
+    judgeReviewsPage,
     editOpen,
     editTarget,
     editForm,
@@ -3296,6 +3372,191 @@ function Dashboard({
     });
   };
 
+  const loadJudges = async ({
+    competitionId,
+    keyword = judgeKeyword,
+    page = judgePage,
+    status = judgeStatus,
+  }) => {
+    if (Number.isNaN(Number(competitionId)) || Number(competitionId) <= 0) return;
+    const requestId = createRequestId();
+    latestRequestIdsRef.current.judges = requestId;
+    setJudgeLoading(true);
+    try {
+      const safePage = Math.max(1, Number(page) || 1);
+      const offset = (safePage - 1) * JUDGE_PAGE_SIZE;
+      const { items, total, requestId: echoedRequestId } = await listCompetitionJudgesPaged(
+        Number(competitionId),
+        JUDGE_PAGE_SIZE,
+        offset,
+        keyword || '',
+        {
+          status: status || 'all',
+          requestId,
+        }
+      );
+      if (latestRequestIdsRef.current.judges !== echoedRequestId) return;
+      const rows = Array.isArray(items) ? items : [];
+      const totalPages = Math.max(1, Math.ceil((Number(total) || 0) / JUDGE_PAGE_SIZE));
+      setJudgeRows(rows);
+      setJudgeTotalPages(totalPages);
+      setJudgeHasNext(safePage < totalPages);
+    } catch (error) {
+      if (latestRequestIdsRef.current.judges !== requestId) return;
+      setJudgeRows([]);
+      setJudgeTotalPages(1);
+      setJudgeHasNext(false);
+      setMessage({ type: 'error', text: getErrorText(error, '加载评委列表失败') });
+    } finally {
+      if (latestRequestIdsRef.current.judges === requestId) setJudgeLoading(false);
+    }
+  };
+
+  const openJudgeDialog = async (row) => {
+    if (!row?.id) return;
+    const competitionId = Number(row.id);
+    setJudgeTarget(row);
+    setJudgeRows([]);
+    setJudgeKeywordInput('');
+    setJudgeKeyword('');
+    setJudgeStatus('all');
+    setJudgePage(1);
+    setJudgeHasNext(false);
+    setJudgeTotalPages(1);
+    setJudgeAccount('');
+    setJudgeOpen(true);
+    await loadJudges({
+      competitionId,
+      keyword: '',
+      page: 1,
+      status: 'all',
+    });
+  };
+
+  const searchJudges = async () => {
+    const competitionId = Number(judgeTarget?.id);
+    if (Number.isNaN(competitionId) || competitionId <= 0) return;
+    const keyword = judgeKeywordInput.trim();
+    setJudgeKeyword(keyword);
+    setJudgePage(1);
+    await loadJudges({
+      competitionId,
+      keyword,
+      page: 1,
+      status: judgeStatus,
+    });
+  };
+
+  const clearJudgesSearch = async () => {
+    const competitionId = Number(judgeTarget?.id);
+    if (Number.isNaN(competitionId) || competitionId <= 0) return;
+    setJudgeKeywordInput('');
+    setJudgeKeyword('');
+    setJudgePage(1);
+    await loadJudges({
+      competitionId,
+      keyword: '',
+      page: 1,
+      status: judgeStatus,
+    });
+  };
+
+  const changeJudgePage = async (nextPage) => {
+    const competitionId = Number(judgeTarget?.id);
+    if (Number.isNaN(competitionId) || competitionId <= 0) return;
+    const safePage = Math.max(1, Number(nextPage) || 1);
+    setJudgePage(safePage);
+    await loadJudges({
+      competitionId,
+      keyword: judgeKeyword,
+      page: safePage,
+      status: judgeStatus,
+    });
+  };
+
+  const applyJudgeStatusFilter = async (nextStatus) => {
+    const competitionId = Number(judgeTarget?.id);
+    if (Number.isNaN(competitionId) || competitionId <= 0) return;
+    setJudgeStatus(nextStatus);
+    setJudgePage(1);
+    await loadJudges({
+      competitionId,
+      keyword: judgeKeyword,
+      page: 1,
+      status: nextStatus,
+    });
+  };
+
+  const submitAddJudge = async () => {
+    const competitionId = Number(judgeTarget?.id);
+    if (Number.isNaN(competitionId) || competitionId <= 0) return;
+    const account = judgeAccount.trim();
+    if (!account) {
+      setMessage({ type: 'warning', text: '请先填写评委邮箱或手机号' });
+      return;
+    }
+    setJudgeAddConfirmAccount(account);
+    setJudgeAddConfirmOpen(true);
+  };
+
+  const confirmAddJudge = async () => {
+    const competitionId = Number(judgeTarget?.id);
+    if (Number.isNaN(competitionId) || competitionId <= 0) return;
+    const account = String(judgeAddConfirmAccount || '').trim();
+    if (!account) {
+      setJudgeAddConfirmOpen(false);
+      return;
+    }
+    setJudgeSubmitting(true);
+    try {
+      await addCompetitionJudge(
+        competitionId,
+        { account, status: 'active' },
+        { requestId: createRequestId() }
+      );
+      setJudgeAccount('');
+      setJudgeAddConfirmAccount('');
+      setJudgeAddConfirmOpen(false);
+      setMessage({ type: 'success', text: '评委添加成功' });
+      await loadJudges({
+        competitionId,
+        keyword: judgeKeyword,
+        page: judgePage,
+        status: judgeStatus,
+      });
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorText(error, '添加评委失败') });
+    } finally {
+      setJudgeSubmitting(false);
+    }
+  };
+
+  const switchJudgeStatus = async (row, nextStatus) => {
+    const competitionId = Number(judgeTarget?.id);
+    const judgeUserId = Number(row?.judge_user_id);
+    if (Number.isNaN(competitionId) || competitionId <= 0 || Number.isNaN(judgeUserId) || judgeUserId <= 0) return;
+    setJudgeSubmitting(true);
+    try {
+      await updateCompetitionJudgeStatus(
+        competitionId,
+        judgeUserId,
+        { status: nextStatus },
+        { requestId: createRequestId() }
+      );
+      setMessage({ type: 'success', text: '评委状态已更新' });
+      await loadJudges({
+        competitionId,
+        keyword: judgeKeyword,
+        page: judgePage,
+        status: judgeStatus,
+      });
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorText(error, '更新评委状态失败') });
+    } finally {
+      setJudgeSubmitting(false);
+    }
+  };
+
   const exportParticipantsExcel = async () => {
     const competitionId = Number(participantsTarget?.id);
     if (Number.isNaN(competitionId) || competitionId <= 0) return;
@@ -3443,6 +3704,16 @@ function Dashboard({
     }
     setMyInfoCompetition(row);
     setMyInfoOpen(true);
+  };
+
+  const openJudgeReviewCompetition = (row) => {
+    const competitionId = Number(row?.id || row?.competition_id);
+    if (Number.isNaN(competitionId) || competitionId <= 0) return;
+    if (typeof onOpenJudgeReviewCompetition === 'function') {
+      onOpenJudgeReviewCompetition(competitionId);
+      return;
+    }
+    setMessage({ type: 'warning', text: '当前路由未接入评审页面，请联系开发者配置' });
   };
 
   const homePane = (
@@ -3674,6 +3945,16 @@ function Dashboard({
                       </Button>
                       <Button
                         variant="outlined"
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openJudgeDialog(row);
+                        }}
+                      >
+                        评委管理
+                      </Button>
+                      <Button
+                        variant="outlined"
                         color="error"
                         size="small"
                         onClick={(e) => {
@@ -3834,6 +4115,147 @@ function Dashboard({
           variant="contained"
           disabled={myContestsLoading || !myContestHasNext}
           onClick={() => setMyContestPage((p) => p + 1)}
+        >
+          下一页
+        </Button>
+      </Stack>
+    </Paper>
+  );
+
+  const judgeReviewsPane = (
+    <Paper sx={{ p: 3, borderRadius: 4, border: `1px solid ${CONTEST_THEME.panelBorder}`, background: CONTEST_THEME.panelGradient }}>
+      <Alert severity="info" sx={{ mb: 2 }}>
+        这里展示你担任评委的比赛。点击“进入评审”后，会打开独立评审页面进行打分与填写评语。
+      </Alert>
+      <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+        <TextField
+          fullWidth
+          size="small"
+          label="搜索我评审的比赛（名称/描述）"
+          value={judgeReviewsKeywordInput}
+          onChange={(e) => setJudgeReviewsKeywordInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              setJudgeReviewsPage(1);
+              setJudgeReviewsKeyword(judgeReviewsKeywordInput.trim());
+            }
+          }}
+        />
+        <Button
+          variant="contained"
+          onClick={() => {
+            setJudgeReviewsPage(1);
+            setJudgeReviewsKeyword(judgeReviewsKeywordInput.trim());
+          }}
+        >
+          搜索
+        </Button>
+        <Button
+          variant="outlined"
+          onClick={() => {
+            setJudgeReviewsKeywordInput('');
+            setJudgeReviewsPage(1);
+            setJudgeReviewsKeyword('');
+          }}
+        >
+          清空
+        </Button>
+      </Stack>
+      <TableContainer sx={{ border: `1px solid ${CONTEST_THEME.tableBorder}`, borderRadius: 2, minHeight: 420 }}>
+        <Table>
+            <TableHead>
+              <TableRow sx={{ background: CONTEST_THEME.tableHeadBg }}>
+                <TableCell>比赛名称</TableCell>
+                <TableCell align="center">比赛状态</TableCell>
+                <TableCell align="center">评委状态</TableCell>
+                <TableCell align="center">作品总数</TableCell>
+                <TableCell align="center">已评审作品数量</TableCell>
+                <TableCell align="center">评审进度</TableCell>
+                <TableCell align="center">操作</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+            {judgeCompetitionRows.map((row) => {
+              const competitionStatus = statusOf(row);
+              const isJudgeActive = String(row.my_judge_status || '').toLowerCase() === 'active';
+              const totalCount = Math.max(0, Number(row.my_assigned_count || 0));
+              const reviewedCount = Math.min(totalCount, Math.max(0, Number(row.my_reviewed_count || 0)));
+              const progressPercent = totalCount > 0 ? Number(((reviewedCount / totalCount) * 100).toFixed(1)) : 0;
+              return (
+                <TableRow
+                  key={`judge_competition_${row.id}`}
+                  hover
+                  onClick={() => openDetail(row, false)}
+                  sx={{ cursor: 'pointer' }}
+                >
+                  <TableCell sx={{ fontWeight: 700 }}>
+                    <Box>{row.name}</Box>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.4 }}>
+                      评审时间：{formatTimeValue(row.review_start, '待定')} ~ {formatTimeValue(row.review_end, '待定')}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="center">
+                    <Chip
+                      size="small"
+                      color={competitionStatus.color}
+                      label={competitionStatus.label}
+                    />
+                  </TableCell>
+                  <TableCell align="center">
+                    <Chip
+                      size="small"
+                      color={isJudgeActive ? 'success' : 'default'}
+                      label={isJudgeActive ? '启用' : '停用'}
+                    />
+                  </TableCell>
+                  <TableCell align="center">{totalCount}</TableCell>
+                  <TableCell align="center">{reviewedCount}</TableCell>
+                  <TableCell align="center" sx={{ minWidth: 120 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 700, color: '#5a3b88' }}>
+                      {`${progressPercent}%`}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="center">
+                    <Button
+                      variant="contained"
+                      size="small"
+                      disabled={!isJudgeActive}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isJudgeActive) {
+                          setMessage({ type: 'warning', text: '当前评委状态为停用，无法进入评审' });
+                          return;
+                        }
+                        openJudgeReviewCompetition(row);
+                      }}
+                    >
+                      进入评审
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+            {!judgeCompetitionRows.length && !judgeReviewsLoading && (
+              <TableRow><TableCell align="center" colSpan={7}>暂无你参与评审的比赛</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1} sx={{ mt: 1.2 }}>
+        <Typography variant="body2" color="text.secondary">{judgeReviewsPage}/{judgeReviewsTotalPages} 页</Typography>
+        <Button
+          size="small"
+          variant="outlined"
+          disabled={judgeReviewsLoading || judgeReviewsPage <= 1}
+          onClick={() => setJudgeReviewsPage((p) => Math.max(1, p - 1))}
+        >
+          上一页
+        </Button>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={judgeReviewsLoading || !judgeReviewsHasNext}
+          onClick={() => setJudgeReviewsPage((p) => p + 1)}
         >
           下一页
         </Button>
@@ -4303,6 +4725,7 @@ function Dashboard({
             <>
               {tab === 'home' && homePane}
               {tab === 'my_contests' && myContestsPane}
+              {tab === 'judge_reviews' && judgeReviewsPane}
               {tab === 'profile' && profilePane}
               {tab === 'create' && createPane}
               {tab === 'mine' && minePane}
@@ -4469,6 +4892,14 @@ function Dashboard({
                 onClick={() => openParticipants(detailData)}
               >
                 参赛选手信息
+              </Button>
+            )}
+            {detailData && (detailFromMine || canCreateCompetition) && (
+              <Button
+                variant="outlined"
+                onClick={() => openJudgeDialog(detailData)}
+              >
+                评委管理
               </Button>
             )}
             {detailFromMine && detailData && (
@@ -5051,6 +5482,229 @@ function Dashboard({
             {participantsExporting ? '导出中...' : '导出全部Excel'}
           </Button>
           <Button onClick={() => setParticipantsOpen(false)}>关闭</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={judgeOpen}
+        onClose={(event, reason) => {
+          if (reason === 'backdropClick') {
+            setMessage({ type: 'warning', text: '请先点击“关闭”按钮，再关闭窗口' });
+            return;
+          }
+          setJudgeOpen(false);
+          setJudgeTarget(null);
+          setJudgeAddConfirmOpen(false);
+          setJudgeAddConfirmAccount('');
+        }}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle sx={{ pr: 6 }}>
+          评委管理（比赛：{judgeTarget?.name || judgeTarget?.id || '-'}）
+          <IconButton
+            aria-label="关闭"
+            onClick={() => {
+              setJudgeOpen(false);
+              setJudgeTarget(null);
+              setJudgeAddConfirmOpen(false);
+              setJudgeAddConfirmAccount('');
+            }}
+            sx={{ position: 'absolute', right: 8, top: 8 }}
+          >
+            <CloseRoundedIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5}>
+            <Alert severity="info">
+              通过手机号或邮箱添加评委。评委采用“启用/停用”管理，不提供删除操作。
+            </Alert>
+            <Typography variant="subtitle2" color="text.secondary">新增评委</Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <TextField
+                fullWidth
+                size="small"
+                id="judge-account-input"
+                name="judge_account"
+                label="新增评委（手机号 / 邮箱）"
+                value={judgeAccount}
+                onChange={(event) => setJudgeAccount(event.target.value)}
+                autoComplete="new-password"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') submitAddJudge();
+                }}
+              />
+              <Button
+                variant="contained"
+                onClick={submitAddJudge}
+                disabled={judgeSubmitting}
+                sx={{ minWidth: { xs: '100%', sm: 96 } }}
+              >
+                添加评委
+              </Button>
+            </Stack>
+            <Typography variant="subtitle2" color="text.secondary">筛选评委</Typography>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <TextField
+                fullWidth
+                size="small"
+                id="judge-search-input"
+                name="judge_search"
+                label="搜索评委（用户名/邮箱/手机号）"
+                value={judgeKeywordInput}
+                onChange={(event) => setJudgeKeywordInput(event.target.value)}
+                autoComplete="off"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') searchJudges();
+                }}
+              />
+              <FormControl size="small" sx={{ minWidth: 140 }}>
+                <InputLabel id="judge-status-label">状态</InputLabel>
+                <Select
+                  labelId="judge-status-label"
+                  label="状态"
+                  value={judgeStatus}
+                  onChange={(event) => applyJudgeStatusFilter(String(event.target.value || 'all'))}
+                >
+                  <MenuItem value="all">全部</MenuItem>
+                  <MenuItem value="active">启用</MenuItem>
+                  <MenuItem value="disabled">停用</MenuItem>
+                </Select>
+              </FormControl>
+              <Button variant="contained" onClick={searchJudges} disabled={judgeLoading}>搜索</Button>
+              <Button variant="outlined" onClick={clearJudgesSearch} disabled={judgeLoading}>清空</Button>
+            </Stack>
+
+            {judgeLoading ? (
+              <Stack alignItems="center" sx={{ py: 4 }} spacing={1}>
+                <CircularProgress size={26} />
+                <Typography variant="body2" color="text.secondary">评委列表加载中...</Typography>
+              </Stack>
+            ) : !judgeRows.length ? (
+              <Typography color="text.secondary">当前比赛暂无评委</Typography>
+            ) : (
+              <TableContainer sx={{ border: `1px solid ${CONTEST_THEME.tableBorder}`, borderRadius: 2, maxHeight: 420 }}>
+                <Table size="small" stickyHeader>
+                  <TableHead>
+                    <TableRow sx={{ background: CONTEST_THEME.tableHeadBg }}>
+                      <TableCell>用户名</TableCell>
+                      <TableCell>邮箱</TableCell>
+                      <TableCell>手机号</TableCell>
+                      <TableCell align="center">状态</TableCell>
+                      <TableCell>添加人</TableCell>
+                      <TableCell>添加时间</TableCell>
+                      <TableCell align="center">操作</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {judgeRows.map((row) => (
+                      <TableRow key={`${row.competition_id}_${row.judge_user_id}`} hover>
+                        <TableCell>{row.judge_username || '-'}</TableCell>
+                        <TableCell>{row.judge_email || '-'}</TableCell>
+                        <TableCell>{row.judge_phone || '-'}</TableCell>
+                        <TableCell align="center">
+                          <Chip
+                            size="small"
+                            color={String(row.status || '').toLowerCase() === 'disabled' ? 'warning' : 'success'}
+                            variant={String(row.status || '').toLowerCase() === 'disabled' ? 'outlined' : 'filled'}
+                            label={judgeStatusLabel(row.status)}
+                          />
+                        </TableCell>
+                        <TableCell>{row.invited_by_username || row.invited_by_email || '-'}</TableCell>
+                        <TableCell>{formatTimeValue(row.invited_at, '-')}</TableCell>
+                        <TableCell align="center">
+                          <Stack direction="row" spacing={1} justifyContent="center">
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              disabled={judgeSubmitting}
+                              onClick={() => switchJudgeStatus(
+                                row,
+                                String(row.status || '').toLowerCase() === 'disabled' ? 'active' : 'disabled'
+                              )}
+                            >
+                              {String(row.status || '').toLowerCase() === 'disabled' ? '启用' : '停用'}
+                            </Button>
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+            {!judgeLoading && !!judgeRows.length && (
+              <Stack direction="row" justifyContent="flex-end" alignItems="center" spacing={1}>
+                <Typography variant="body2" color="text.secondary">{judgePage}/{judgeTotalPages} 页</Typography>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={judgePage <= 1}
+                  onClick={() => changeJudgePage(judgePage - 1)}
+                >
+                  上一页
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  disabled={!judgeHasNext}
+                  onClick={() => changeJudgePage(judgePage + 1)}
+                >
+                  下一页
+                </Button>
+              </Stack>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setJudgeOpen(false);
+              setJudgeTarget(null);
+              setJudgeAddConfirmOpen(false);
+              setJudgeAddConfirmAccount('');
+            }}
+          >
+            关闭
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={judgeAddConfirmOpen}
+        onClose={(event, reason) => {
+          if (judgeSubmitting || reason === 'backdropClick') return;
+          setJudgeAddConfirmOpen(false);
+        }}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>确认添加评委</DialogTitle>
+        <DialogContent dividers>
+          <Stack spacing={1.5}>
+            <Alert severity="warning">
+              确认将「{judgeAddConfirmAccount || '-'}」添加为当前比赛评委吗？
+            </Alert>
+            <Typography variant="body2" color="text.secondary">
+              添加后评委默认状态为“启用”。
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setJudgeAddConfirmOpen(false)}
+            disabled={judgeSubmitting}
+          >
+            取消
+          </Button>
+          <Button
+            variant="contained"
+            onClick={confirmAddJudge}
+            disabled={judgeSubmitting}
+          >
+            {judgeSubmitting ? '提交中...' : '确认添加'}
+          </Button>
         </DialogActions>
       </Dialog>
 
