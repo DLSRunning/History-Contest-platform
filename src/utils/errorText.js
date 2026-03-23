@@ -1,5 +1,31 @@
 const CHINESE_TEXT_RE = /[\u4e00-\u9fff]/;
 
+function mapAuthErrorToChinese(text, status = 0) {
+  const raw = String(text || '').trim();
+  if (!raw) {
+    if (Number(status) === 401) return '登录已失效，请重新登录';
+    return '';
+  }
+
+  const lower = raw.toLowerCase();
+  const knownAuthErrors = (
+    lower.includes('缺少 access_token')
+    || lower.includes('missing access_token')
+    || lower.includes('无效的 access_token')
+    || lower.includes('invalid access_token')
+    || lower.includes('access_token 已过期')
+    || lower.includes('access_token expired')
+    || lower.includes('token has expired')
+    || lower.includes('用户不存在或已失效')
+    || lower.includes('user not found or inactive')
+  );
+
+  if (knownAuthErrors) {
+    return '登录已失效，请重新登录';
+  }
+  return '';
+}
+
 function mapTechnicalTextToChinese(text, fallback) {
   const raw = String(text || '').trim();
   if (!raw) return fallback;
@@ -75,12 +101,27 @@ function extractDetail(data) {
 export function getUserFriendlyErrorText(error, fallback = '请求失败，请稍后重试') {
   if (!error) return fallback;
 
+  const status = Number(error?.response?.status || 0);
+  if (status === 413) return '上传文件过大，请压缩后重试';
+  if (status === 408 || status === 504) return '上传超时，请稍后重试';
+  if (status === 502 || status === 503) return '服务暂时不可用，请稍后重试';
+
   const responseData = error?.response?.data;
   const responseText = extractDetail(responseData);
-  if (responseText) return sanitizeForUser(responseText, fallback);
+  if (responseText) {
+    const authText = mapAuthErrorToChinese(responseText, status);
+    if (authText) return authText;
+    return sanitizeForUser(responseText, fallback);
+  }
 
   const rawMessage = String(error?.message || '').trim();
-  if (rawMessage) return sanitizeForUser(rawMessage, fallback);
+  if (rawMessage) {
+    const authText = mapAuthErrorToChinese(rawMessage, status);
+    if (authText) return authText;
+    return sanitizeForUser(rawMessage, fallback);
+  }
+
+  if (status === 401) return '登录已失效，请重新登录';
 
   const code = String(error?.code || '').trim();
   if (code) return sanitizeForUser(code, fallback);

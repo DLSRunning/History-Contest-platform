@@ -394,6 +394,18 @@ export async function listCompetitionJudgesPaged(competitionId, limit = 20, offs
   return toPagedResult(response, limit, offset, requestId);
 }
 
+export async function previewCompetitionJudgeCandidate(competitionId, account, options = {}) {
+  const { requestId } = options;
+  const response = await client.get(`${COMPETITIONS_API_PREFIX}/${Number(competitionId)}/judges/candidate`, {
+    params: { account },
+    headers: requestIdHeaders(requestId),
+  });
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
 export async function addCompetitionJudge(competitionId, payload, options = {}) {
   const { requestId } = options;
   const response = await client.post(
@@ -631,16 +643,23 @@ export async function getMySubmissionDetail(competitionId, options = {}) {
 }
 
 export async function uploadSubmissionAttachment(competitionId, file, options = {}) {
-  const { requestId, onUploadProgress } = options;
+  const { requestId, onUploadProgress, timeoutMs } = options;
   const formData = new FormData();
   formData.append('competition_id', String(Number(competitionId)));
   formData.append('file', file);
+  const resolvedTimeout = Number(
+    timeoutMs
+    || contestRuntimeConfig?.api?.uploadTimeoutMs
+    || contestRuntimeConfig?.api?.timeoutMs
+    || 120000
+  );
   const response = await client.post(`${SUBMISSIONS_API_PREFIX}/upload`, formData, {
     headers: {
       ...(requestId ? { [REQUEST_ID_HEADER]: requestId } : {}),
       'Content-Type': 'multipart/form-data',
     },
     onUploadProgress,
+    timeout: Number.isFinite(resolvedTimeout) && resolvedTimeout > 0 ? resolvedTimeout : undefined,
   });
   return {
     data: response?.data?.data || null,
@@ -693,6 +712,18 @@ export async function createSubmission(payload, options = {}) {
   });
   return {
     data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
+export async function submitSubmission(payload, options = {}) {
+  const { requestId } = options;
+  const response = await client.post(`${SUBMISSIONS_API_PREFIX}/submit`, payload, {
+    headers: requestIdHeaders(requestId),
+  });
+  return {
+    data: response?.data?.data || null,
+    message: String(response?.data?.message || '').trim(),
     requestId: pickRequestId(response?.headers) || requestId || '',
   };
 }

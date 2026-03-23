@@ -17,6 +17,7 @@ import {
   Grid2,
   IconButton,
   InputLabel,
+  LinearProgress,
   Menu,
   MenuItem,
   Paper,
@@ -46,7 +47,6 @@ import {
   addCompetitionJudge,
   createCompetition,
   createRequestId,
-  createSubmission,
   batchDecideUserSyncReview,
   decideUserSyncReview,
   deleteCompetition,
@@ -64,8 +64,9 @@ import {
   listMySubmissionsPaged,
   listParticipants,
   listUserSyncReviewsPaged,
+  previewCompetitionJudgeCandidate,
   registerParticipant,
-  resubmitSubmission,
+  submitSubmission as submitSubmissionApi,
   unregisterParticipant,
   updateCompetitionJudgeStatus,
   updateCurrentUserProfile,
@@ -94,6 +95,8 @@ const USER_SYNC_REVIEW_NAV_ITEM = {
 const ALL_NAV_ITEMS = [...BASE_NAV_ITEMS, USER_SYNC_REVIEW_NAV_ITEM];
 export const DASHBOARD_VIEW_STATE_STORAGE_KEY = 'competition_dashboard_view_state';
 const PAGE_SIZE = 7;
+const SUBMISSION_STATUS_MIN_INTERVAL_MS = 4000;
+const SUBMISSION_STATUS_FORCE_MIN_INTERVAL_MS = 1200;
 const PARTICIPANTS_PAGE_SIZE = 20;
 const JUDGE_PAGE_SIZE = 10;
 const EMPTY_SUBMISSION_FORM = {
@@ -794,6 +797,12 @@ function DateTimeField({
     onChange({ target: { value: `${nextDate}T${h}:${m}` } });
   };
 
+  const blockManualDateInput = (event) => {
+    // 仅允许 Tab 焦点切换，禁止键盘直接输入日期，统一通过日历控件选择。
+    if (event.key === 'Tab') return;
+    event.preventDefault();
+  };
+
   return (
     <Grid2 container spacing={1}>
       <Grid2 size={dateSize}>
@@ -805,6 +814,13 @@ function DateTimeField({
             value={datePart}
             disabled={controlDisabled}
             onChange={(e) => commit(e.target.value, hourPart, minutePart, true)}
+            inputProps={{
+              onKeyDown: blockManualDateInput,
+              onPaste: (e) => e.preventDefault(),
+              onDrop: (e) => e.preventDefault(),
+              onBeforeInput: (e) => e.preventDefault(),
+              inputMode: 'none',
+            }}
             InputLabelProps={{ shrink: true }}
             error={error}
             sx={{
@@ -1389,6 +1405,8 @@ function Dashboard({
   const [judgeAccount, setJudgeAccount] = useState('');
   const [judgeAddConfirmOpen, setJudgeAddConfirmOpen] = useState(false);
   const [judgeAddConfirmAccount, setJudgeAddConfirmAccount] = useState('');
+  const [judgeAddCandidate, setJudgeAddCandidate] = useState(null);
+  const [judgeAddConfirmLoading, setJudgeAddConfirmLoading] = useState(false);
   const [myInfoOpen, setMyInfoOpen] = useState(false);
   const [myInfoCompetition, setMyInfoCompetition] = useState(null);
   const latestRequestIdsRef = useRef({
@@ -1402,6 +1420,13 @@ function Dashboard({
     participants: '',
     judges: '',
   });
+  const submissionStatusLoadRef = useRef({
+    inFlight: false,
+    failureCount: 0,
+    lastFailedAt: 0,
+    lastStartedAt: 0,
+  });
+  const submissionSubmitLockRef = useRef(false);
   const autoOpenedDetailRef = useRef('');
   const detailRegistered = useMemo(() => {
     const id = Number(detailData?.id);
@@ -2036,7 +2061,20 @@ function Dashboard({
     await loadUserSyncReviews(userSyncKeyword, safePage, userSyncStatus);
   };
 
-  const loadSubmissionStatus = async () => {
+  const loadSubmissionStatus = async (options = {}) => {
+    const force = Boolean(options?.force);
+    const guard = submissionStatusLoadRef.current;
+    const now = Date.now();
+    const minIntervalMs = force ? SUBMISSION_STATUS_FORCE_MIN_INTERVAL_MS : SUBMISSION_STATUS_MIN_INTERVAL_MS;
+    const backoffMs = guard.failureCount > 0
+      ? Math.min(30_000, 1_000 * (2 ** Math.min(guard.failureCount - 1, 5)))
+      : 0;
+    if (guard.inFlight) return;
+    if (guard.lastStartedAt > 0 && now - guard.lastStartedAt < minIntervalMs) return;
+    if (!force && guard.lastFailedAt > 0 && now - guard.lastFailedAt < backoffMs) return;
+
+    guard.lastStartedAt = now;
+    guard.inFlight = true;
     const nextMap = {};
     let offset = 0;
     const limit = 50;
@@ -2064,8 +2102,18 @@ function Dashboard({
         if (!rows.length || offset >= total) break;
       }
       setSubmittedCompetitionMap(nextMap);
-    } catch {
-      setSubmittedCompetitionMap({});
+      guard.failureCount = 0;
+      guard.lastFailedAt = 0;
+    } catch (error) {
+      guard.failureCount += 1;
+      guard.lastFailedAt = Date.now();
+      trackAction('submission_status_load_failed', {
+        user: user?.email,
+        reason: getErrorText(error, '加载提交状态失败'),
+        failure_count: guard.failureCount,
+      });
+    } finally {
+      guard.inFlight = false;
     }
   };
 
@@ -2259,46 +2307,53 @@ function Dashboard({
   }, [userSyncPage, userSyncTotalPages]);
 
   useEffect(() => {
-    localStorage.setItem(
-      DASHBOARD_VIEW_STATE_STORAGE_KEY,
-      JSON.stringify({
-        userEmail: String(user?.email || ''),
-        tab,
-        homeKeywordInput,
-        homeKeyword,
-        homePage,
-        mineKeywordInput,
-        mineKeyword,
-        minePage,
-        userSyncKeywordInput,
-        userSyncKeyword,
-        userSyncStatus,
-        userSyncPage,
-        myContestKeywordInput,
-        myContestKeyword,
-        myContestPage,
-        judgeReviewsKeywordInput,
-        judgeReviewsKeyword,
-        judgeReviewsPage,
-        editOpen,
-        editTarget,
-        editForm,
-        detailOpen,
-        detailData,
-        detailFromMine,
-        deleteOpen,
-        deleteTarget,
-        deleteEmail,
-        quitOpen,
-        quitTarget,
-        submissionOpen,
-        submissionTarget,
-        submissionMode,
-        submissionForm,
-        submissionAttachment,
-        submissionExisting,
-      })
-    );
+    try {
+      localStorage.setItem(
+        DASHBOARD_VIEW_STATE_STORAGE_KEY,
+        JSON.stringify({
+          userEmail: String(user?.email || ''),
+          tab,
+          homeKeywordInput,
+          homeKeyword,
+          homePage,
+          mineKeywordInput,
+          mineKeyword,
+          minePage,
+          userSyncKeywordInput,
+          userSyncKeyword,
+          userSyncStatus,
+          userSyncPage,
+          myContestKeywordInput,
+          myContestKeyword,
+          myContestPage,
+          judgeReviewsKeywordInput,
+          judgeReviewsKeyword,
+          judgeReviewsPage,
+          editOpen,
+          editTarget,
+          editForm,
+          detailOpen,
+          detailData,
+          detailFromMine,
+          deleteOpen,
+          deleteTarget,
+          deleteEmail,
+          quitOpen,
+          quitTarget,
+          submissionOpen,
+          submissionTarget,
+          submissionMode,
+          submissionForm,
+          submissionAttachment,
+          submissionExisting,
+        })
+      );
+    } catch (error) {
+      trackAction('dashboard_view_state_persist_failed', {
+        user: user?.email,
+        reason: String(error?.message || error || 'unknown'),
+      });
+    }
   }, [
     user?.email,
     tab,
@@ -2489,7 +2544,10 @@ function Dashboard({
     }
   };
 
-  const submitSubmission = async () => {
+  const handleSubmissionSubmit = async () => {
+    if (submissionSubmitLockRef.current) {
+      return;
+    }
     const competitionId = Number(submissionTarget?.id);
     if (Number.isNaN(competitionId) || competitionId <= 0) return;
     if (statusOf(submissionTarget || {}).key !== 'ongoing') {
@@ -2541,6 +2599,7 @@ function Dashboard({
     if (Object.keys(errors).length) return;
 
     const isCreateMode = submissionMode !== 'resubmit';
+    submissionSubmitLockRef.current = true;
     setActionLoading(true);
     setSubmissionProgress({ mode: 'uploading', percent: 0 });
     try {
@@ -2622,19 +2681,39 @@ function Dashboard({
           : { source: 'contest_front' },
       };
 
-      let response;
-      if (isCreateMode) {
-        response = await createSubmission({ competition_id: competitionId, ...payload }, { requestId: createRequestId() });
-      } else {
-        response = await resubmitSubmission(competitionId, payload, { requestId: createRequestId() });
-      }
+      const response = await submitSubmissionApi({ competition_id: competitionId, ...payload }, { requestId: createRequestId() });
 
       const latestRow = response?.data || null;
+      const submitMessage = String(response?.message || '').trim();
+      const isResubmitByServer = (
+        submitMessage.includes('修改')
+        || Number(latestRow?.submit_version || 1) > 1
+        || Number(latestRow?.modification_count || 0) > 0
+      );
+      const successText = submitMessage || (isResubmitByServer ? '作品修改提交成功' : '作品提交成功');
+      const normalizedAttachmentPayloadList = attachmentPayloadList.map((item) => normalizeAttachmentMeta(item)).filter(Boolean);
+      const mergedRow = latestRow ? { ...latestRow } : null;
+      if (mergedRow && attachmentMode === 'multiple' && normalizedAttachmentPayloadList.length) {
+        const nextExtraMeta = {
+          ...(mergedRow.extra_meta && typeof mergedRow.extra_meta === 'object' ? mergedRow.extra_meta : {}),
+          source: 'contest_front',
+          attachments: normalizedAttachmentPayloadList.map((item) => toAttachmentPayload(item)),
+        };
+        mergedRow.extra_meta = nextExtraMeta;
+      }
+      if (mergedRow && attachmentMeta) {
+        mergedRow.attachment_name = mergedRow.attachment_name || attachmentMeta.attachment_name || null;
+        mergedRow.attachment_path = mergedRow.attachment_path || attachmentMeta.attachment_path || null;
+        mergedRow.attachment_ext = mergedRow.attachment_ext || attachmentMeta.attachment_ext || null;
+        mergedRow.attachment_mime = mergedRow.attachment_mime || attachmentMeta.attachment_mime || null;
+        mergedRow.attachment_size = mergedRow.attachment_size ?? attachmentMeta.attachment_size ?? null;
+        mergedRow.attachment_hash = mergedRow.attachment_hash || attachmentMeta.attachment_hash || null;
+      }
       setSubmissionMode('resubmit');
-      if (latestRow) {
-        setSubmissionExisting(latestRow);
-        setSubmissionAttachment(normalizeAttachmentMeta(latestRow) || attachmentMeta);
-        setSubmissionForm(buildSubmissionFormFromRow(latestRow));
+      if (mergedRow) {
+        setSubmissionExisting(mergedRow);
+        setSubmissionAttachment(normalizeAttachmentMeta(mergedRow) || attachmentMeta);
+        setSubmissionForm(buildSubmissionFormFromRow(mergedRow));
         setSubmissionClearedFormats({});
       } else {
         setSubmissionAttachment(attachmentMeta || null);
@@ -2650,15 +2729,54 @@ function Dashboard({
           last_submitted_at: latestRow?.last_submitted_at || latestRow?.updated_at || new Date().toISOString(),
         },
       }));
+      try {
+        const detailRequestId = createRequestId();
+        const { data: latestDetail, requestId: echoedRequestId } = await getMySubmissionDetail(competitionId, { requestId: detailRequestId });
+        if (echoedRequestId === detailRequestId && latestDetail) {
+          setSubmissionExisting(latestDetail);
+          setSubmissionAttachment(normalizeAttachmentMeta(latestDetail) || attachmentMeta);
+          setSubmissionForm(buildSubmissionFormFromRow(latestDetail));
+          setSubmissionClearedFormats({});
+        }
+      } catch {
+        // 详情对齐失败时保留当前已更新状态，不影响提交成功路径
+      }
+      await loadSubmissionStatus({ force: true });
 
-      trackAction(isCreateMode ? 'submission_create_success' : 'submission_resubmit_success', {
+      trackAction(isResubmitByServer ? 'submission_resubmit_success' : 'submission_create_success', {
         user: user?.email,
         competition_id: competitionId,
         submission_id: latestRow?.id,
       });
-      setMessage({ type: 'success', text: isCreateMode ? '作品提交成功' : '作品修改提交成功' });
+      setMessage({ type: 'success', text: successText });
     } catch (error) {
       const rawErrorText = getErrorText(error, isCreateMode ? '提交作品失败' : '修改提交失败');
+      if (
+        isCreateMode
+        && (
+          String(rawErrorText).includes('已提交该比赛作品')
+          || String(error?.response?.data?.detail || '').includes('已提交该比赛作品')
+        )
+      ) {
+        const requestId = createRequestId();
+        latestRequestIdsRef.current.submission = requestId;
+        try {
+          const { data, requestId: echoedRequestId } = await getMySubmissionDetail(competitionId, { requestId });
+          if (latestRequestIdsRef.current.submission === echoedRequestId && data) {
+            setSubmissionMode('resubmit');
+            setSubmissionExisting(data);
+            setSubmissionForm(buildSubmissionFormFromRow(data));
+            setSubmissionAttachment(normalizeAttachmentMeta(data));
+            setSubmissionClearedFormats({});
+            setSubmissionFile(null);
+            setSubmissionFilesByFormat({});
+            setMessage({ type: 'warning', text: '你已提交过该比赛作品，已自动切换为“修改提交”模式' });
+            return;
+          }
+        } catch {
+          // 查询已有提交失败时，继续走通用错误提示
+        }
+      }
       const finalErrorText = isCreateMode
         ? rawErrorText
         : (rawErrorText.startsWith('修改失败：') ? rawErrorText : `修改失败：${rawErrorText}`);
@@ -2670,6 +2788,7 @@ function Dashboard({
       setMessage({ type: 'error', text: finalErrorText });
     } finally {
       setSubmissionProgress({ mode: 'idle', percent: 0 });
+      submissionSubmitLockRef.current = false;
       setActionLoading(false);
     }
   };
@@ -3495,8 +3614,25 @@ function Dashboard({
       setMessage({ type: 'warning', text: '请先填写评委邮箱或手机号' });
       return;
     }
-    setJudgeAddConfirmAccount(account);
-    setJudgeAddConfirmOpen(true);
+    setJudgeAddConfirmLoading(true);
+    try {
+      const { data } = await previewCompetitionJudgeCandidate(
+        competitionId,
+        account,
+        { requestId: createRequestId() }
+      );
+      if (!data) {
+        setMessage({ type: 'error', text: '未查询到评委信息，请核对账号后重试' });
+        return;
+      }
+      setJudgeAddConfirmAccount(account);
+      setJudgeAddCandidate(data);
+      setJudgeAddConfirmOpen(true);
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorText(error, '查询评委信息失败') });
+    } finally {
+      setJudgeAddConfirmLoading(false);
+    }
   };
 
   const confirmAddJudge = async () => {
@@ -3505,6 +3641,7 @@ function Dashboard({
     const account = String(judgeAddConfirmAccount || '').trim();
     if (!account) {
       setJudgeAddConfirmOpen(false);
+      setJudgeAddCandidate(null);
       return;
     }
     setJudgeSubmitting(true);
@@ -3516,6 +3653,7 @@ function Dashboard({
       );
       setJudgeAccount('');
       setJudgeAddConfirmAccount('');
+      setJudgeAddCandidate(null);
       setJudgeAddConfirmOpen(false);
       setMessage({ type: 'success', text: '评委添加成功' });
       await loadJudges({
@@ -5305,7 +5443,7 @@ function Dashboard({
         </DialogContent>
         <DialogActions>
           <Button onClick={closeSubmissionDialog} disabled={actionLoading}>关闭</Button>
-          <Button variant="contained" onClick={submitSubmission} disabled={actionLoading || submissionLoading}>
+          <Button variant="contained" onClick={handleSubmissionSubmit} disabled={actionLoading || submissionLoading}>
             {actionLoading ? '提交中...' : (submissionMode === 'resubmit' ? '确认修改提交' : '确认提交')}
           </Button>
         </DialogActions>
@@ -5509,6 +5647,7 @@ function Dashboard({
               setJudgeTarget(null);
               setJudgeAddConfirmOpen(false);
               setJudgeAddConfirmAccount('');
+              setJudgeAddCandidate(null);
             }}
             sx={{ position: 'absolute', right: 8, top: 8 }}
           >
@@ -5538,10 +5677,10 @@ function Dashboard({
               <Button
                 variant="contained"
                 onClick={submitAddJudge}
-                disabled={judgeSubmitting}
+                disabled={judgeSubmitting || judgeAddConfirmLoading}
                 sx={{ minWidth: { xs: '100%', sm: 96 } }}
               >
-                添加评委
+                {judgeAddConfirmLoading ? '查询中...' : '添加评委'}
               </Button>
             </Stack>
             <Typography variant="subtitle2" color="text.secondary">筛选评委</Typography>
@@ -5664,6 +5803,7 @@ function Dashboard({
               setJudgeTarget(null);
               setJudgeAddConfirmOpen(false);
               setJudgeAddConfirmAccount('');
+              setJudgeAddCandidate(null);
             }}
           >
             关闭
@@ -5674,8 +5814,9 @@ function Dashboard({
       <Dialog
         open={judgeAddConfirmOpen}
         onClose={(event, reason) => {
-          if (judgeSubmitting || reason === 'backdropClick') return;
+          if (judgeSubmitting || judgeAddConfirmLoading || reason === 'backdropClick') return;
           setJudgeAddConfirmOpen(false);
+          setJudgeAddCandidate(null);
         }}
         fullWidth
         maxWidth="sm"
@@ -5686,6 +5827,17 @@ function Dashboard({
             <Alert severity="warning">
               确认将「{judgeAddConfirmAccount || '-'}」添加为当前比赛评委吗？
             </Alert>
+            <Stack spacing={0.5} sx={{ px: 0.5 }}>
+              <Typography variant="body2">
+                用户名：{judgeAddCandidate?.judge_username || '-'}
+              </Typography>
+              <Typography variant="body2">
+                邮箱：{judgeAddCandidate?.judge_email || '-'}
+              </Typography>
+              <Typography variant="body2">
+                手机号：{judgeAddCandidate?.judge_phone || '-'}
+              </Typography>
+            </Stack>
             <Typography variant="body2" color="text.secondary">
               添加后评委默认状态为“启用”。
             </Typography>
@@ -5693,15 +5845,18 @@ function Dashboard({
         </DialogContent>
         <DialogActions>
           <Button
-            onClick={() => setJudgeAddConfirmOpen(false)}
-            disabled={judgeSubmitting}
+            onClick={() => {
+              setJudgeAddConfirmOpen(false);
+              setJudgeAddCandidate(null);
+            }}
+            disabled={judgeSubmitting || judgeAddConfirmLoading}
           >
             取消
           </Button>
           <Button
             variant="contained"
             onClick={confirmAddJudge}
-            disabled={judgeSubmitting}
+            disabled={judgeSubmitting || judgeAddConfirmLoading}
           >
             {judgeSubmitting ? '提交中...' : '确认添加'}
           </Button>

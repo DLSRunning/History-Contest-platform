@@ -72,6 +72,8 @@ const defaults = {
     requestIdHeaderName: 'X-Request-Id',
     withCredentials: true,
     timeoutMs: 12000,
+    // 附件上传建议使用更长超时，避免网络抖动下大文件上传被过早中断
+    uploadTimeoutMs: 180000,
   },
   route: {
     loginPathPrefix: '/login',
@@ -164,6 +166,11 @@ export const contestRuntimeConfig = {
       defaults.api.withCredentials
     ),
     timeoutMs: Number(runtimeOverride?.api?.timeoutMs || env.VITE_CONTEST_TIMEOUT_MS || defaults.api.timeoutMs),
+    uploadTimeoutMs: Number(
+      runtimeOverride?.api?.uploadTimeoutMs
+      || env.VITE_CONTEST_UPLOAD_TIMEOUT_MS
+      || defaults.api.uploadTimeoutMs
+    ),
   },
   route: {
     loginPathPrefix: normalizePrefix(

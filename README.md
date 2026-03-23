@@ -81,6 +81,8 @@ npx playwright install chromium
 - `VITE_CONTEST_USER_SYNC_REVIEW_PATH=${BASE_PATH}/user-sync-review`
 - `VITE_CONTEST_COMPETITION_PATH_PREFIX=${BASE_PATH}/competitions`
 - `VITE_CONTEST_COMPETITION_REGISTER_SUFFIX=/register`
+- `VITE_CONTEST_TIMEOUT_MS=12000`
+- `VITE_CONTEST_UPLOAD_TIMEOUT_MS=180000`（上传附件建议单独放宽）
 
 建议流程：
 
@@ -122,6 +124,10 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # 上传附件建议放宽超时与请求体大小，避免“前端失败但后端无异常日志”
+        client_max_body_size 200m;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 }
 ```
