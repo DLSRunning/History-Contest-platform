@@ -42,11 +42,17 @@ const EMPTY_FORM = {
   password: '',
 };
 
-const STUDY_STATUS_OPTIONS = [
-  { value: 'in_school', label: '在读' },
-  { value: 'not_in_school', label: '非在读' },
+const MAJOR_CATEGORY_OPTIONS = [
+  '中国古代史',
+  '中国近现代史',
+  '世界史',
+  '考古学',
+  '文博',
+  '区域国别',
+  '哲学',
+  '政治学',
+  '其它',
 ];
-
 const GRADE_OPTIONS = ['本科生', '研究生', '博士生'];
 const REGISTER_DRAFT_STORAGE_KEY = 'contest_register_draft_v1';
 const EMAIL_REGEX = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
@@ -110,15 +116,8 @@ function parseDraft(raw) {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
     const draft = pickDraftFromForm(parsed);
-    if (draft.study_status !== 'in_school' && draft.study_status !== 'not_in_school') {
-      draft.study_status = 'in_school';
-    }
-    if (draft.study_status === 'in_school') draft.occupation = '';
-    if (draft.study_status === 'not_in_school') {
-      draft.school = '';
-      draft.major = '';
-      draft.grade = '';
-    }
+    draft.study_status = 'in_school';
+    draft.occupation = '';
     return draft;
   } catch {
     return null;
@@ -184,14 +183,6 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
   ]);
 
   const set = (k) => (e) => setFormData((prev) => ({ ...prev, [k]: e.target.value }));
-  const onStudyStatusChange = (e) => {
-    const nextStatus = String(e.target.value || '');
-    setFormData((prev) => ({
-      ...prev,
-      study_status: nextStatus,
-      occupation: nextStatus === 'in_school' ? '' : prev.occupation,
-    }));
-  };
 
   const sendCode = async () => {
     const phone = normalizePhone(formData.phone);
@@ -270,8 +261,8 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
       phone: normalizePhone(formData.phone),
       verify_code: String(formData.verify_code || '').trim(),
       email: normalizeEmail(formData.email),
-      study_status: String(formData.study_status || 'in_school').trim(),
-      occupation: String(formData.occupation || '').trim(),
+      study_status: 'in_school',
+      occupation: '',
       school: String(formData.school || '').trim(),
       major: String(formData.major || '').trim(),
       grade: String(formData.grade || '').trim(),
@@ -287,17 +278,8 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
       return;
     }
     if (payload.study_status === 'in_school' && (!payload.school || !payload.major || !payload.grade)) {
-      setMsg({ type: 'error', content: '在读用户需填写学校、专业、年级' });
+      setMsg({ type: 'error', content: '就读用户需填写学校、专业、年级' });
       return;
-    }
-    if (payload.study_status === 'not_in_school' && !payload.occupation) {
-      setMsg({ type: 'error', content: '非在读用户请填写职业' });
-      return;
-    }
-    if (payload.study_status === 'not_in_school') {
-      payload.school = '';
-      payload.major = '';
-      payload.grade = '';
     }
 
     setPendingPayload(payload);
@@ -414,60 +396,36 @@ export default function RegisterPage({ search = '', onNavigate, onSuccess }) {
                   sx={INPUT_SX}
                 />
                 <TextField
+                  label="学校*"
+                  placeholder="请输入学校名称"
+                  value={formData.school}
+                  onChange={set('school')}
+                  fullWidth
+                  size="small"
+                  sx={INPUT_SX}
+                />
+                <TextField
                   select
-                  label="在读状态*"
-                  value={formData.study_status}
-                  onChange={onStudyStatusChange}
+                  label="专业*"
+                  value={formData.major}
+                  onChange={set('major')}
                   fullWidth
                   size="small"
                   sx={INPUT_SX}
                 >
-                  {STUDY_STATUS_OPTIONS.map((item) => (
-                    <MenuItem key={item.value} value={item.value}>
-                      {item.label}
+                  {[...new Set([...MAJOR_CATEGORY_OPTIONS, String(formData.major || '').trim()].filter(Boolean))].map((item) => (
+                    <MenuItem key={item} value={item}>
+                      {item}
                     </MenuItem>
                   ))}
                 </TextField>
-                {formData.study_status === 'not_in_school' && (
-                  <TextField
-                    label="职业*"
-                    placeholder="请输入职业"
-                    value={formData.occupation}
-                    onChange={set('occupation')}
-                    fullWidth
-                    size="small"
-                    sx={INPUT_SX}
-                  />
-                )}
-                {formData.study_status === 'in_school' && (
-                  <>
-                    <TextField
-                      label="学校*"
-                      placeholder="请输入学校名称"
-                      value={formData.school}
-                      onChange={set('school')}
-                      fullWidth
-                      size="small"
-                      sx={INPUT_SX}
-                    />
-                    <TextField
-                      label="专业*"
-                      placeholder="请输入专业名称"
-                      value={formData.major}
-                      onChange={set('major')}
-                      fullWidth
-                      size="small"
-                      sx={INPUT_SX}
-                    />
-                    <TextField select label="年级*" value={formData.grade} onChange={set('grade')} fullWidth size="small" sx={INPUT_SX}>
-                      {GRADE_OPTIONS.map((item) => (
-                        <MenuItem key={item} value={item}>
-                          {item}
-                        </MenuItem>
-                      ))}
-                    </TextField>
-                  </>
-                )}
+                <TextField select label="年级*" value={formData.grade} onChange={set('grade')} fullWidth size="small" sx={INPUT_SX}>
+                  {GRADE_OPTIONS.map((item) => (
+                    <MenuItem key={item} value={item}>
+                      {item}
+                    </MenuItem>
+                  ))}
+                </TextField>
                 <Button
                   type="submit"
                   variant="contained"

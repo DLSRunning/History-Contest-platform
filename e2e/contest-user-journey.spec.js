@@ -233,7 +233,8 @@ test.describe('Contest 自动化 E2E + 用户旅程', () => {
     await page.getByLabel('邮箱*').fill('new_user@example.com');
     await page.getByLabel('密码*').fill('Test@123456');
     await page.getByLabel('学校*').fill('南京大学');
-    await page.getByLabel('专业*').fill('软件工程');
+    await page.getByLabel('专业*').click();
+    await page.getByRole('option', { name: '中国古代史' }).click();
     await page.getByLabel('年级*').click();
     await page.getByRole('option', { name: '本科生' }).click();
 

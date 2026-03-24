@@ -120,7 +120,7 @@ const EMPTY_FORM = {
   participant_limit_mode: 'unlimited',
   school: '',
   major: '',
-  grade: '',
+  grade: [],
   registration_code_required: false,
   allowed_formats: ['pdf'],
   attachment_mode: 'single',
@@ -146,6 +146,17 @@ const EMPTY_PROFILE_FORM = {
 };
 
 const ALLOWED_FORMAT_OPTIONS = ['pdf', 'docx'];
+const MAJOR_CATEGORY_OPTIONS = [
+  '中国古代史',
+  '中国近现代史',
+  '世界史',
+  '考古学',
+  '文博',
+  '区域国别',
+  '哲学',
+  '政治学',
+  '其它',
+];
 const GRADE_OPTIONS = ['本科生', '研究生', '博士生'];
 const UNLIMITED_TEXT = '无限制';
 const COMPETITION_OPTIONAL_TIMELINE_FIELDS = [
@@ -231,6 +242,24 @@ function normalizeAttachmentMode(value) {
 function normalizeParticipantLimitMode(value) {
   const token = String(value || '').trim().toLowerCase();
   return token === 'in_school' ? 'in_school' : 'unlimited';
+}
+
+function normalizeGradeLimitList(value) {
+  const values = Array.isArray(value)
+    ? value
+    : String(value || '')
+      .split(/[,，、;；|/]+/);
+  const mapped = values
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .map((token) => {
+      if (token === '本科') return '本科生';
+      if (token === '硕士' || token === '硕士生' || token === '研究') return '研究生';
+      if (token === '博士') return '博士生';
+      return token;
+    });
+  const deduped = [...new Set(mapped)];
+  return deduped;
 }
 
 function toInputDateTime(v) {
@@ -467,7 +496,10 @@ function validateProfileForm(form) {
 function competitionLimitText(item) {
   const limitMode = normalizeParticipantLimitMode(item?.participant_limit_mode);
   const parts = [];
-  if (limitMode === 'in_school') parts.push('仅在校生');
+  if (limitMode === 'in_school') {
+    const gradeLimits = normalizeGradeLimitList(item?.grade);
+    parts.push(gradeLimits.length ? gradeLimits.join('、') : '在校生');
+  }
   if (registrationCodeRequired(item)) parts.push('邀请码');
   return parts.length ? parts.join(' + ') : '无限制';
 }
@@ -598,6 +630,7 @@ function loadDashboardViewState() {
 function buildPayload(form) {
   const attachmentMode = normalizeAttachmentMode(form.attachment_mode);
   const participantLimitMode = normalizeParticipantLimitMode(form.participant_limit_mode);
+  const gradeLimits = normalizeGradeLimitList(form.grade);
   return {
     competition_info: {
       name: form.name.trim(),
@@ -615,7 +648,7 @@ function buildPayload(form) {
       participant_limit_mode: participantLimitMode,
       school: '',
       major: '',
-      grade: '',
+      grade: participantLimitMode === 'in_school' ? gradeLimits.join(',') : '',
       registration_code_required: Boolean(form.registration_code_required),
       registration_code: '',
       allowed_formats: normalizeAllowedFormats(form.allowed_formats),
@@ -922,6 +955,8 @@ function DateTimeField({
 
 function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
   const selectedFormats = normalizeAllowedFormats(form.allowed_formats);
+  const selectedGradeLimits = normalizeGradeLimitList(form.grade);
+  const gradeLimitOptions = [...new Set([...GRADE_OPTIONS, ...selectedGradeLimits])];
   const attachmentMode = normalizeAttachmentMode(form.attachment_mode);
   const optionalTimelineKeys = COMPETITION_OPTIONAL_TIMELINE_FIELDS.map((field) => field.key);
   const timelineModes = form?._timeline_modes && typeof form._timeline_modes === 'object'
@@ -933,6 +968,8 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
     const rawValue = e.target.value;
     const value = k === 'allowed_formats'
       ? (Array.isArray(rawValue) ? rawValue : String(rawValue || '').split(',').map((s) => s.trim()).filter(Boolean))
+      : k === 'grade'
+        ? normalizeGradeLimitList(rawValue)
       : rawValue;
     if (setErrors) {
       setErrors((prev) => {
@@ -962,6 +999,14 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
           ...prev,
           max_word_count: value,
           max_file_size_mb: estimateMaxFileSizeMb(maxWordCount),
+        };
+      }
+      if (k === 'participant_limit_mode') {
+        const nextMode = normalizeParticipantLimitMode(value);
+        return {
+          ...prev,
+          participant_limit_mode: nextMode,
+          grade: nextMode === 'in_school' ? normalizeGradeLimitList(prev.grade) : [],
         };
       }
       const timelineIndex = optionalTimelineKeys.indexOf(k);
@@ -1093,6 +1138,36 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
             </FormHelperText>
           </FormControl>
         </Grid2>
+        {normalizeParticipantLimitMode(form.participant_limit_mode) === 'in_school' && (
+          <Grid2 size={3}>
+            <FormControl fullWidth>
+              <InputLabel>限制年级(可多选)</InputLabel>
+              <Select
+                multiple
+                label="限制年级(可多选)"
+                value={selectedGradeLimits}
+                onChange={set('grade')}
+                renderValue={(selected) => (Array.isArray(selected) ? selected.join('、') : '')}
+              >
+                {gradeLimitOptions.map((gradeOption) => (
+                  <MenuItem key={gradeOption} value={gradeOption}>
+                    <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Box sx={{ fontWeight: selectedGradeLimits.includes(gradeOption) ? 700 : 500 }}>{gradeOption}</Box>
+                      <CheckCircleRoundedIcon
+                        fontSize="small"
+                        sx={{
+                          color: 'success.main',
+                          opacity: selectedGradeLimits.includes(gradeOption) ? 1 : 0,
+                        }}
+                      />
+                    </Box>
+                  </MenuItem>
+                ))}
+              </Select>
+              <FormHelperText>可单选或多选，不选择表示不限具体年级（仅限制在校生）</FormHelperText>
+            </FormControl>
+          </Grid2>
+        )}
         <Grid2 size={3}>
           <FormControl fullWidth>
             <InputLabel>邀请码限制</InputLabel>
@@ -1529,6 +1604,11 @@ function Dashboard({
     [profileForm]
   );
   const profileInSchool = profileStatus === 'in_school';
+  const profileMajorOptions = useMemo(() => {
+    const current = String(profileForm?.major || '').trim();
+    if (!current || MAJOR_CATEGORY_OPTIONS.includes(current)) return MAJOR_CATEGORY_OPTIONS;
+    return [...MAJOR_CATEGORY_OPTIONS, current];
+  }, [profileForm?.major]);
   const profileGradeOptions = useMemo(() => {
     const current = String(profileForm?.grade || '').trim();
     if (!current || GRADE_OPTIONS.includes(current)) return GRADE_OPTIONS;
@@ -2449,7 +2529,7 @@ function Dashboard({
       participant_limit_mode: normalizeParticipantLimitMode(source.participant_limit_mode),
       school: '',
       major: '',
-      grade: '',
+      grade: normalizeGradeLimitList(source.grade),
       registration_code_required: registrationCodeRequired(source),
       allowed_formats: normalizeAllowedFormats(source.allowed_formats),
       attachment_mode: normalizeAttachmentMode(source.attachment_mode),
@@ -4443,35 +4523,6 @@ function Dashboard({
       <Stack spacing={2}>
         {profileEditing ? (
           <>
-            <TextField
-              select
-              fullWidth
-              size="small"
-              label="在读状态 *"
-              value={profileStatus}
-              onChange={(e) => {
-                const nextStatus = String(e.target.value || 'in_school');
-                setProfileForm((prev) => ({
-                  ...prev,
-                  study_status: nextStatus,
-                  school: nextStatus === 'in_school' ? prev.school : '',
-                  major: nextStatus === 'in_school' ? prev.major : '',
-                  grade: nextStatus === 'in_school' ? prev.grade : '',
-                  occupation: nextStatus === 'in_school' ? '' : prev.occupation,
-                }));
-                setProfileErrors((prev) => ({
-                  ...prev,
-                  study_status: '',
-                  school: '',
-                  major: '',
-                  grade: '',
-                  occupation: '',
-                }));
-              }}
-            >
-              <MenuItem value="in_school">在读</MenuItem>
-              <MenuItem value="not_in_school">非在读</MenuItem>
-            </TextField>
             {profileInSchool ? (
               <Grid2 container spacing={2}>
                 <Grid2 size={4}>
@@ -4491,6 +4542,7 @@ function Dashboard({
                 </Grid2>
                 <Grid2 size={4}>
                   <TextField
+                    select
                     fullWidth
                     size="small"
                     label="专业 *"
@@ -4502,7 +4554,11 @@ function Dashboard({
                       setProfileForm((prev) => ({ ...prev, major: value }));
                       setProfileErrors((prev) => ({ ...prev, major: '' }));
                     }}
-                  />
+                  >
+                    {profileMajorOptions.map((item) => (
+                      <MenuItem key={item} value={item}>{item}</MenuItem>
+                    ))}
+                  </TextField>
                 </Grid2>
                 <Grid2 size={4}>
                   <TextField
