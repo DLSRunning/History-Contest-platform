@@ -1555,9 +1555,6 @@ function Dashboard({
     return submissionPrimaryFormat ? (submissionFilesByFormat[submissionPrimaryFormat] || null) : null;
   }, [submissionAttachmentMode, submissionPrimaryFormat, submissionFilesByFormat, submissionFile]);
   const submissionAttachmentName = submissionPrimaryFile?.name || submissionAttachment?.attachment_name || '';
-  const submissionAttachmentSizeText = submissionPrimaryFile
-    ? `${(submissionPrimaryFile.size / 1024 / 1024).toFixed(2)}MB`
-    : '';
   const hasSubmissionAttachment = Boolean(submissionPrimaryFile || submissionAttachment);
   const submissionAttachmentMenuOpen = Boolean(submissionAttachmentMenuAnchor);
   const submissionExistingAttachmentMap = useMemo(() => {
@@ -5351,7 +5348,6 @@ function Dashboard({
                     const existingMeta = submissionExistingAttachmentMap[fmt] || null;
                     const hasAttachment = Boolean(selectedFile || existingMeta);
                     const attachmentName = selectedFile?.name || existingMeta?.attachment_name || `${fmt.toUpperCase()}附件`;
-                    const attachmentSizeText = selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)}MB` : '';
                     return (
                       <Stack key={fmt} direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                         <Button variant="outlined" component="label">
@@ -5440,7 +5436,7 @@ function Dashboard({
                                     whiteSpace: 'nowrap',
                                   }}
                                 >
-                                  {attachmentSizeText ? `${attachmentSizeText} · 点击预览/下载` : '点击预览/下载'}
+                                  点击预览/下载
                                 </Typography>
                               </Box>
                             </ButtonBase>
@@ -5557,7 +5553,7 @@ function Dashboard({
                               whiteSpace: 'nowrap',
                             }}
                           >
-                            {submissionAttachmentSizeText ? `${submissionAttachmentSizeText} · 点击预览/下载` : '点击预览/下载'}
+                            点击预览/下载
                           </Typography>
                         </Box>
                       </ButtonBase>
