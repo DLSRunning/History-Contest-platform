@@ -51,6 +51,7 @@ import {
   decideUserSyncReview,
   deleteCompetition,
   getCompetitionById,
+  getCompetitionTrainingManualMeta,
   getCreatePermission,
   getMySubmissionAttachmentBlob,
   listMyJudgeCompetitionsPaged,
@@ -1321,12 +1322,14 @@ function Dashboard({
   user,
   onLogout,
   onGoLogin,
+  onNavigate,
   setMessage,
   routeTab = 'home',
   onRouteChange,
   onOpenJudgeReviewCompetition,
   competitionPathPrefix = '/competitions',
   competitionRegisterSuffix = '/register',
+  competitionTrainingManualSuffix = '/training-manual',
   autoOpenCompetitionId = 0,
   onAutoOpenCompetitionHandled,
 }) {
@@ -1424,6 +1427,7 @@ function Dashboard({
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailData, setDetailData] = useState(null);
   const [detailFromMine, setDetailFromMine] = useState(false);
+  const [detailTrainingManualMeta, setDetailTrainingManualMeta] = useState(null);
   const [deleteOpen, setDeleteOpen] = useState(() => Boolean(persistedViewState.deleteOpen));
   const [deleteTarget, setDeleteTarget] = useState(() => persistedViewState.deleteTarget || null);
   const [deleteEmail, setDeleteEmail] = useState(() => String(persistedViewState.deleteEmail || ''));
@@ -1491,6 +1495,7 @@ function Dashboard({
     judgeReviews: '',
     userSync: '',
     detail: '',
+    detailTrainingManual: '',
     submission: '',
     participants: '',
     judges: '',
@@ -1575,6 +1580,22 @@ function Dashboard({
     if (Number.isNaN(competitionId)) return null;
     return submittedCompetitionMap[competitionId] || null;
   }, [detailData?.id, submittedCompetitionMap]);
+  const detailCanOpenTrainingManual = useMemo(() => {
+    if (!detailData) return false;
+    if (typeof detailTrainingManualMeta?.show_entry_for_participant === 'boolean') {
+      return detailTrainingManualMeta.show_entry_for_participant;
+    }
+    return Boolean(
+      detailTrainingManualMeta?.configured
+      && detailTrainingManualMeta?.enabled
+      && detailTrainingManualMeta?.in_window
+      && detailTrainingManualMeta?.is_registered
+    );
+  }, [detailData, detailTrainingManualMeta]);
+  const detailPrimaryActionButtonSx = {
+    minWidth: 128,
+    whiteSpace: 'nowrap',
+  };
   const userSyncCurrentPageIds = useMemo(
     () => userSyncRows
       .map((row) => Number(row?.contest_user_id))
@@ -1727,15 +1748,29 @@ function Dashboard({
     (tab === 'judge_reviews' && judgeReviewsLoading) ||
     (tab === 'user_sync_review' && userSyncLoading);
 
+  const navigateToPath = (targetPath) => {
+    const normalized = String(targetPath || '').trim();
+    if (!normalized) return;
+    if (typeof onNavigate === 'function') {
+      onNavigate(normalized);
+      return;
+    }
+    window.location.href = normalized;
+  };
+
   const buildCompetitionPath = (competitionId, mode = 'detail') => {
     const id = Number(competitionId);
     if (Number.isNaN(id) || id <= 0) return '';
     const base = String(competitionPathPrefix || '/competitions').replace(/\/+$/, '') || '/competitions';
     const registerSuffix = String(competitionRegisterSuffix || '/register').trim() || '/register';
-    const suffixWithSlash = registerSuffix.startsWith('/') ? registerSuffix : `/${registerSuffix}`;
-    return mode === 'register'
-      ? `${base}/${id}${suffixWithSlash}`
-      : `${base}/${id}`;
+    const trainingManualSuffix = String(competitionTrainingManualSuffix || '/training-manual').trim() || '/training-manual';
+    const registerSuffixWithSlash = registerSuffix.startsWith('/') ? registerSuffix : `/${registerSuffix}`;
+    const trainingManualSuffixWithSlash = trainingManualSuffix.startsWith('/')
+      ? trainingManualSuffix
+      : `/${trainingManualSuffix}`;
+    if (mode === 'register') return `${base}/${id}${registerSuffixWithSlash}`;
+    if (mode === 'training_manual') return `${base}/${id}${trainingManualSuffixWithSlash}`;
+    return `${base}/${id}`;
   };
   const buildCompetitionShareUrl = (competitionId, mode = 'detail') => {
     const path = buildCompetitionPath(competitionId, mode);
@@ -2541,15 +2576,28 @@ function Dashboard({
     const targetId = Number(competitionId);
     if (Number.isNaN(targetId) || targetId <= 0) return;
     const requestId = createRequestId();
+    const trainingManualRequestId = createRequestId();
     latestRequestIdsRef.current.detail = requestId;
+    latestRequestIdsRef.current.detailTrainingManual = trainingManualRequestId;
     setDetailData(fallbackRow || { id: targetId });
     setDetailFromMine(fromMine);
+    setDetailTrainingManualMeta(null);
     setDetailOpen(true);
     setDetailLoading(true);
     try {
       const { data: detail, requestId: echoedRequestId } = await getCompetitionById(targetId, { requestId });
       if (latestRequestIdsRef.current.detail !== echoedRequestId) return;
       setDetailData(detail || fallbackRow || { id: targetId });
+      try {
+        const { data: meta, requestId: echoedMetaRequestId } = await getCompetitionTrainingManualMeta(targetId, {
+          requestId: trainingManualRequestId,
+        });
+        if (latestRequestIdsRef.current.detailTrainingManual !== echoedMetaRequestId) return;
+        setDetailTrainingManualMeta(meta || null);
+      } catch {
+        if (latestRequestIdsRef.current.detailTrainingManual !== trainingManualRequestId) return;
+        setDetailTrainingManualMeta(null);
+      }
       trackAction('competition_detail_open', { user: user?.email, id: targetId, fromMine });
     } catch (error) {
       if (latestRequestIdsRef.current.detail !== requestId) return;
@@ -2562,6 +2610,34 @@ function Dashboard({
     const targetId = Number(row?.id);
     if (Number.isNaN(targetId) || targetId <= 0) return;
     await openDetailById(targetId, fromMine, row || null);
+  };
+
+  const openTrainingManualPage = (competition, options = {}) => {
+    const competitionId = Number(competition?.id || competition);
+    if (Number.isNaN(competitionId) || competitionId <= 0) return;
+    const manualMeta = options?.manualMeta || null;
+    const manualMode = String(manualMeta?.manual_mode || '').trim().toLowerCase();
+    const feishuUrl = String(manualMeta?.feishu_url || '').trim();
+    if (manualMode === 'feishu' && feishuUrl) {
+      setDetailOpen(false);
+      window.open(feishuUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    const targetBasePath = buildCompetitionPath(competitionId, 'training_manual');
+    if (!targetBasePath) return;
+    const participantView = Boolean(options?.participantView);
+    const targetPath = participantView
+      ? `${targetBasePath}${targetBasePath.includes('?') ? '&' : '?'}manual_view=participant`
+      : targetBasePath;
+    const fromDetail = Boolean(options?.fromDetail);
+    if (fromDetail && typeof onNavigate === 'function') {
+      const detailPath = buildCompetitionPath(competitionId, 'detail');
+      if (detailPath) {
+        navigateToPath(detailPath);
+      }
+    }
+    setDetailOpen(false);
+    navigateToPath(targetPath);
   };
 
   const openSubmissionDialog = async (row) => {
@@ -4139,8 +4215,25 @@ function Dashboard({
                   </TableCell>
                   <TableCell align="center"><Chip size="small" color={s.color} label={s.label} /></TableCell>
                   <TableCell align="center">
-                    <Stack direction="row" spacing={1} justifyContent="center">
+                    <Box
+                      sx={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(3, max-content)',
+                        gap: 1,
+                        justifyContent: 'center',
+                      }}
+                    >
                       <Button variant="outlined" size="small" onClick={(e) => { e.stopPropagation(); openDetail(row, true); }}>查看详情</Button>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openTrainingManualPage(row);
+                        }}
+                      >
+                        比赛手册
+                      </Button>
                       <Button
                         variant="outlined"
                         size="small"
@@ -4182,7 +4275,7 @@ function Dashboard({
                       >
                         删除
                       </Button>
-                    </Stack>
+                    </Box>
                   </TableCell>
                 </TableRow>
               );
@@ -5063,23 +5156,53 @@ function Dashboard({
                 )}
               </Stack>
             )}
-            {!detailFromMine && statusOf(detailData || {}).key === 'ongoing' && (
-              detailRegistered ? (
-                <Button
-                  variant={detailSubmittedInfo ? 'outlined' : 'contained'}
-                  color={detailSubmittedInfo ? 'warning' : 'primary'}
-                  onClick={() => openSubmissionDialog(detailData)}
-                >
-                  {detailSubmittedInfo ? '修改作品' : '提交作品'}
-                </Button>
-              ) : (
-                <Button variant="outlined" disabled>
-                  未参赛
-                </Button>
-              )
+            {((!detailFromMine && statusOf(detailData || {}).key === 'ongoing') || (detailData && detailCanOpenTrainingManual)) && (
+              <Stack direction="row" spacing={1.25} alignItems="center" useFlexGap flexWrap="wrap">
+                {!detailFromMine && statusOf(detailData || {}).key === 'ongoing' && (
+                  detailRegistered ? (
+                    <Button
+                      variant={detailSubmittedInfo ? 'outlined' : 'contained'}
+                      color={detailSubmittedInfo ? 'warning' : 'primary'}
+                      onClick={() => openSubmissionDialog(detailData)}
+                      sx={detailPrimaryActionButtonSx}
+                    >
+                      {detailSubmittedInfo ? '修改作品' : '提交作品'}
+                    </Button>
+                  ) : (
+                    <Button variant="outlined" disabled sx={detailPrimaryActionButtonSx}>
+                      未参赛
+                    </Button>
+                  )
+                )}
+                {detailData && detailCanOpenTrainingManual && (
+                  <Button
+                    variant="outlined"
+                    sx={detailPrimaryActionButtonSx}
+                    onClick={() => openTrainingManualPage(detailData, {
+                      fromDetail: true,
+                      participantView: Boolean(detailTrainingManualMeta?.can_manage)
+                        && Boolean(detailTrainingManualMeta?.is_registered),
+                      manualMeta: detailTrainingManualMeta,
+                    })}
+                  >
+                    比赛手册
+                  </Button>
+                )}
+              </Stack>
             )}
           </Box>
           <Stack direction="row" spacing={1}>
+            {detailData && detailTrainingManualMeta?.can_manage && (
+              <Button
+                variant="outlined"
+                onClick={() => openTrainingManualPage(detailData, {
+                  fromDetail: true,
+                  manualMeta: detailTrainingManualMeta,
+                })}
+              >
+                比赛手册
+              </Button>
+            )}
             {detailData && (detailFromMine || canCreateCompetition) && (
               <Button
                 variant="outlined"

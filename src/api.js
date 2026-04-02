@@ -360,6 +360,109 @@ export async function getCompetitionById(id, options = {}) {
   };
 }
 
+export async function getCompetitionTrainingManualMeta(competitionId, options = {}) {
+  const { requestId } = options;
+  const response = await client.get(
+    `${COMPETITIONS_API_PREFIX}/${Number(competitionId)}/training-manual/meta`,
+    { headers: requestIdHeaders(requestId) }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
+export async function getCompetitionTrainingManualContent(competitionId, options = {}) {
+  const { requestId } = options;
+  const response = await client.get(
+    `${COMPETITIONS_API_PREFIX}/${Number(competitionId)}/training-manual/content`,
+    { headers: requestIdHeaders(requestId) }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
+export async function upsertCompetitionTrainingManualContent(competitionId, payload, options = {}) {
+  const { requestId } = options;
+  const response = await client.put(
+    `${COMPETITIONS_API_PREFIX}/${Number(competitionId)}/training-manual/content`,
+    payload,
+    { headers: requestIdHeaders(requestId) }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
+export async function updateCompetitionTrainingManualStatus(competitionId, payload, options = {}) {
+  const { requestId } = options;
+  const response = await client.patch(
+    `${COMPETITIONS_API_PREFIX}/${Number(competitionId)}/training-manual/status`,
+    payload,
+    { headers: requestIdHeaders(requestId) }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
+export async function deleteCompetitionTrainingManualContent(competitionId, options = {}) {
+  const { requestId } = options;
+  const response = await client.delete(
+    `${COMPETITIONS_API_PREFIX}/${Number(competitionId)}/training-manual/content`,
+    { headers: requestIdHeaders(requestId) }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
+export async function uploadCompetitionTrainingManualAsset(competitionId, assetType, file, options = {}) {
+  const { requestId, onUploadProgress, timeoutMs } = options;
+  const formData = new FormData();
+  formData.append('asset_type', String(assetType || '').trim().toLowerCase());
+  formData.append('file', file);
+  const resolvedTimeout = Number(
+    timeoutMs
+    || contestRuntimeConfig?.api?.uploadTimeoutMs
+    || contestRuntimeConfig?.api?.timeoutMs
+    || 120000
+  );
+  const response = await client.post(
+    `${COMPETITIONS_API_PREFIX}/${Number(competitionId)}/training-manual/assets/upload`,
+    formData,
+    {
+      headers: {
+        ...(requestId ? { [REQUEST_ID_HEADER]: requestId } : {}),
+        'Content-Type': 'multipart/form-data',
+      },
+      onUploadProgress,
+      timeout: Number.isFinite(resolvedTimeout) && resolvedTimeout > 0 ? resolvedTimeout : undefined,
+    }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
+export async function deleteCompetitionTrainingManualAsset(competitionId, assetId, options = {}) {
+  const { requestId } = options;
+  const response = await client.delete(
+    `${COMPETITIONS_API_PREFIX}/${Number(competitionId)}/training-manual/assets/${Number(assetId)}`,
+    { headers: requestIdHeaders(requestId) }
+  );
+  return {
+    data: response?.data?.data || null,
+    requestId: pickRequestId(response?.headers) || requestId || '',
+  };
+}
+
 export async function createCompetition(payload, options = {}) {
   const { requestId } = options;
   const response = await client.post(`${COMPETITIONS_API_PREFIX}/create`, payload, {

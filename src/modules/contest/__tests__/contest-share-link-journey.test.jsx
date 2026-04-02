@@ -5,11 +5,21 @@ import React from 'react';
 const getCurrentUserMock = vi.fn();
 const logoutMock = vi.fn(async () => ({ message: 'ok' }));
 const clearClientAuthStateMock = vi.fn();
+const createRequestIdMock = vi.fn(() => 'req_test');
+const getCompetitionTrainingManualMetaMock = vi.fn(async () => ({ data: null, requestId: 'req_test' }));
+const getCompetitionTrainingManualContentMock = vi.fn(async () => ({ data: null, requestId: 'req_test' }));
+const upsertCompetitionTrainingManualContentMock = vi.fn(async () => ({ data: null, requestId: 'req_test' }));
+const deleteCompetitionTrainingManualContentMock = vi.fn(async () => ({ data: null, requestId: 'req_test' }));
 
 vi.mock('../../../api', () => ({
+  createRequestId: (...args) => createRequestIdMock(...args),
   getCurrentUser: (...args) => getCurrentUserMock(...args),
   logout: (...args) => logoutMock(...args),
   clearClientAuthState: (...args) => clearClientAuthStateMock(...args),
+  getCompetitionTrainingManualMeta: (...args) => getCompetitionTrainingManualMetaMock(...args),
+  getCompetitionTrainingManualContent: (...args) => getCompetitionTrainingManualContentMock(...args),
+  upsertCompetitionTrainingManualContent: (...args) => upsertCompetitionTrainingManualContentMock(...args),
+  deleteCompetitionTrainingManualContent: (...args) => deleteCompetitionTrainingManualContentMock(...args),
 }));
 
 vi.mock('../pages/DashboardPage', () => ({

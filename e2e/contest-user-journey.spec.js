@@ -1,20 +1,32 @@
 import { test, expect } from '@playwright/test';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function addDays(base, days) {
+  return new Date(base.getTime() + (days * DAY_MS));
+}
+
+function toIsoNoTimezone(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 function buildResult({ code = 200, message = 'ok', data = null } = {}) {
   return { code, message, data };
 }
 
 function buildCompetitionSummary({ id = 501 } = {}) {
+  const now = new Date();
   return {
     id,
     name: `E2E_比赛_${id}`,
     description: 'E2E 自动化测试比赛',
-    registration_start: '2026-03-01T00:00:00',
-    registration_end: '2026-03-30T23:59:59',
-    submission_start: '2026-03-31T00:00:00',
-    submission_end: '2026-04-15T23:59:59',
-    review_start: '2026-04-16T00:00:00',
-    review_end: '2026-04-30T23:59:59',
+    registration_start: toIsoNoTimezone(addDays(now, -1)),
+    registration_end: toIsoNoTimezone(addDays(now, 7)),
+    submission_start: toIsoNoTimezone(addDays(now, 8)),
+    submission_end: toIsoNoTimezone(addDays(now, 22)),
+    review_start: toIsoNoTimezone(addDays(now, 23)),
+    review_end: toIsoNoTimezone(addDays(now, 37)),
     max_participants: 100,
     current_participants: 0,
     registration_is_full: false,

@@ -13,6 +13,7 @@ import { getUserFriendlyErrorText } from '../../utils/errorText';
 import DashboardPage, { DASHBOARD_VIEW_STATE_STORAGE_KEY } from './pages/DashboardPage';
 import JudgeReviewPage from './pages/JudgeReviewPage';
 import LoginPage from './pages/LoginPage';
+import CompetitionTrainingManualPage from './pages/CompetitionTrainingManualPage';
 import RegisterPage from '../register/RegisterPage';
 
 function isRetryableProbeError(error) {
@@ -56,22 +57,38 @@ function normalizeSearch(search = '') {
   return raw.startsWith('?') ? raw : `?${raw}`;
 }
 
-function isCompetitionPath(path, competitionPathPrefix = '/competitions', competitionRegisterSuffix = '/register') {
+function isCompetitionPath(
+  path,
+  competitionPathPrefix = '/competitions',
+  competitionRegisterSuffix = '/register',
+  competitionTrainingManualSuffix = '/training-manual'
+) {
   const escapedPrefix = String(competitionPathPrefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const escapedSuffix = String(competitionRegisterSuffix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const reg = new RegExp(`^${escapedPrefix}/\\d+(?:${escapedSuffix})?$`);
+  const escapedTrainingSuffix = String(competitionTrainingManualSuffix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const reg = new RegExp(`^${escapedPrefix}/\\d+(?:${escapedSuffix}|${escapedTrainingSuffix})?$`);
   return reg.test(String(path || ''));
 }
 
-function parseCompetitionPath(path, competitionPathPrefix = '/competitions', competitionRegisterSuffix = '/register') {
+function parseCompetitionPath(
+  path,
+  competitionPathPrefix = '/competitions',
+  competitionRegisterSuffix = '/register',
+  competitionTrainingManualSuffix = '/training-manual'
+) {
   const escapedPrefix = String(competitionPathPrefix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const escapedSuffix = String(competitionRegisterSuffix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const reg = new RegExp(`^${escapedPrefix}/(\\d+)(?:(${escapedSuffix}))?$`);
+  const escapedTrainingSuffix = String(competitionTrainingManualSuffix).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const reg = new RegExp(`^${escapedPrefix}/(\\d+)(?:(${escapedSuffix}|${escapedTrainingSuffix}))?$`);
   const matched = String(path || '').match(reg);
   if (!matched) return null;
   const id = Number(matched[1]);
   if (Number.isNaN(id) || id <= 0) return null;
-  return { competitionId: id };
+  const suffix = String(matched[2] || '');
+  let entryMode = 'detail';
+  if (suffix === String(competitionRegisterSuffix)) entryMode = 'register';
+  if (suffix === String(competitionTrainingManualSuffix)) entryMode = 'training_manual';
+  return { competitionId: id, entryMode };
 }
 
 function isJudgeReviewPath(path, judgeReviewsPath = '/judge-reviews') {
@@ -160,6 +177,7 @@ export default function ContestApp({
   userSyncReviewPath = '/user-sync-review',
   competitionPathPrefix = '/competitions',
   competitionRegisterSuffix = '/register',
+  competitionTrainingManualSuffix = '/training-manual',
   onNavigate,
 }) {
   const [message, setMessage] = useState(null);
@@ -182,6 +200,9 @@ export default function ContestApp({
   const normalizedUserSyncReviewPath = normalizePath(userSyncReviewPath);
   const normalizedCompetitionPathPrefix = normalizePath(competitionPathPrefix);
   const competitionRegisterPathSuffix = String(competitionRegisterSuffix || '/register').trim() || '/register';
+  const competitionTrainingManualPathSuffix = String(
+    competitionTrainingManualSuffix || '/training-manual'
+  ).trim() || '/training-manual';
   const staticPathToTab = useMemo(
     () => ({
       [normalizedHomePath]: 'home',
@@ -228,12 +249,18 @@ export default function ContestApp({
       if (normalized === normalizedLoginPath || normalized === normalizedRegisterPath) return true;
       if (Object.keys(staticPathToTab).includes(normalized)) return true;
       if (isJudgeReviewPath(normalized, normalizedJudgeReviewsPath)) return true;
-      return isCompetitionPath(normalized, normalizedCompetitionPathPrefix, competitionRegisterPathSuffix);
+      return isCompetitionPath(
+        normalized,
+        normalizedCompetitionPathPrefix,
+        competitionRegisterPathSuffix,
+        competitionTrainingManualPathSuffix
+      );
     },
     [
       normalizedJudgeReviewsPath,
       normalizedCompetitionPathPrefix,
       competitionRegisterPathSuffix,
+      competitionTrainingManualPathSuffix,
       normalizedLoginPath,
       normalizedRegisterPath,
       staticPathToTab,
@@ -242,7 +269,8 @@ export default function ContestApp({
   const competitionRoute = parseCompetitionPath(
     currentPath,
     normalizedCompetitionPathPrefix,
-    competitionRegisterPathSuffix
+    competitionRegisterPathSuffix,
+    competitionTrainingManualPathSuffix
   );
   const judgeReviewRoute = parseJudgeReviewPath(currentPath, normalizedJudgeReviewsPath);
   const autoOpenCompetitionId = useMemo(() => {
@@ -377,7 +405,7 @@ export default function ContestApp({
       return;
     }
 
-    if (user && competitionRoute) {
+    if (user && competitionRoute && competitionRoute.entryMode !== 'training_manual') {
       const targetPath = buildHomeCompetitionModalPath(
         normalizedHomePath,
         competitionRoute.competitionId
@@ -522,6 +550,14 @@ export default function ContestApp({
           competitionId={judgeReviewRoute.competitionId}
           setMessage={setMessage}
         />
+      ) : competitionRoute?.entryMode === 'training_manual' ? (
+        <CompetitionTrainingManualPage
+          competitionId={competitionRoute.competitionId}
+          search={currentSearch}
+          setMessage={setMessage}
+          onNavigate={navigateTo}
+          homePath={normalizedHomePath}
+        />
       ) : (
         <DashboardPage
           routeTab={staticPathToTab[currentPath] || 'home'}
@@ -534,8 +570,10 @@ export default function ContestApp({
           user={user}
           onLogout={logout}
           onGoLogin={() => navigateTo(normalizedLoginPath)}
+          onNavigate={navigateTo}
           setMessage={setMessage}
           userSyncReviewPath={normalizedUserSyncReviewPath}
+          competitionTrainingManualSuffix={competitionTrainingManualPathSuffix}
         />
       )}
     </>

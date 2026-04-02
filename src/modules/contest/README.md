@@ -3,6 +3,7 @@
 - `ContestApp.jsx`: contest 模块总入口（登录态检查、全局消息、退出登录）。
 - `pages/DashboardPage.jsx`: 比赛主界面（首页、我的比赛、创办比赛、我创办的比赛、个人信息）。
 - `pages/CompetitionEntryPage.jsx`: 比赛独立入口页（`/competitions/:id` 与 `/competitions/:id/register`）。
+- `pages/CompetitionTrainingManualPage.jsx`: 比赛手册页面（`/competitions/:id/training-manual`，参赛者查看/创办者管理，支持 `local` 区块编辑与 `feishu` URL 模式切换）。
 - `pages/LoginPage.jsx`: contest 内置登录页（仅 `auth.mode=embedded` 时使用）。
 - `modules/register/RegisterPage.jsx`: contest 注册页。
 - `index.js`: 模块导出入口。
