@@ -2715,8 +2715,6 @@ function Dashboard({
     if (!title) errors.title = '作品标题不能为空';
     const allowedFormats = normalizeAllowedFormats(submissionTarget?.allowed_formats).map((item) => canonicalFormatToken(item));
     const attachmentMode = normalizeAttachmentMode(submissionTarget?.attachment_mode);
-    const maxMb = Number(submissionTarget?.max_file_size_mb || 0);
-    const maxBytes = !Number.isNaN(maxMb) && maxMb > 0 ? maxMb * 1024 * 1024 : 0;
     if (attachmentMode === 'multiple') {
       const missingFormats = allowedFormats.filter((fmt) => !submissionFilesByFormat[fmt] && !submissionExistingAttachmentMap[fmt]);
       if (missingFormats.length) {
@@ -2734,9 +2732,6 @@ function Dashboard({
           errors.file = `${fmt.toUpperCase()} 附件格式不匹配，请上传 .${fmt} 文件`;
           return;
         }
-        if (maxBytes > 0 && file.size > maxBytes) {
-          errors.file = `${fmt.toUpperCase()} 附件大小超限，最大 ${maxMb}MB`;
-        }
       });
     } else {
       if (!submissionFile) errors.file = submissionMode === 'resubmit' ? '请先选择新附件，再执行修改提交' : '请先选择附件后再提交';
@@ -2745,9 +2740,6 @@ function Dashboard({
         errors.file = '附件缺少后缀名，请重新选择文件';
       } else if (submissionFile && allowedFormats.length && !allowedFormats.includes(canonicalFormatToken(selectedExt))) {
         errors.file = `附件格式不符合要求，仅支持：${normalizeAllowedFormats(submissionTarget?.allowed_formats).join('、')}`;
-      }
-      if (submissionFile && maxBytes > 0 && submissionFile.size > maxBytes) {
-        errors.file = `附件大小超限，最大 ${maxMb}MB`;
       }
     }
 
@@ -5113,7 +5105,6 @@ function Dashboard({
                 )}
                 <DetailItem label="作品提交格式" value={competitionAttachmentText(detailData)} />
                 <DetailItem label="字数要求" value={`${detailData.min_word_count || 0} ~ ${detailData.max_word_count || 0}`} />
-                <DetailItem label="文件大小上限(MB)" value={String(detailData.max_file_size_mb || '-')} />
                 <DetailItem label="是否公开排名" value={Number(detailData.show_ranking) ? '是' : '否'} />
                 {detailRegistered && (
                   <DetailItem
@@ -5330,7 +5321,6 @@ function Dashboard({
                 附件格式：{normalizeAllowedFormats(submissionTarget?.allowed_formats).join('、')}；
                 附件模式：{submissionAttachmentMode === 'multiple' ? '多附件（需全部格式）' : '单附件（任一格式）'}；
                 字数范围：{submissionTarget?.min_word_count || 0} ~ {submissionTarget?.max_word_count || 0}；
-                文件上限：{submissionTarget?.max_file_size_mb || '-'}MB；
                 剩余可修改次数：{submissionRemainingModifications}。
               </Typography>
 
