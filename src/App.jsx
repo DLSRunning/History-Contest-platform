@@ -23,10 +23,19 @@ function parseTargetLocation(target) {
   };
 }
 
-function isCompetitionPath(pathname, competitionPathPrefix, competitionRegisterSuffix) {
+function isCompetitionPath(
+  pathname,
+  competitionPathPrefix,
+  competitionRegisterSuffix,
+  competitionTrainingManualSuffix
+) {
   const escapedPrefix = String(competitionPathPrefix || '/competitions').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const escapedSuffix = String(competitionRegisterSuffix || '/register').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const reg = new RegExp(`^${escapedPrefix}/\\d+(?:${escapedSuffix})?$`);
+  const escapedTrainingSuffix = String(competitionTrainingManualSuffix || '/training-manual').replace(
+    /[.*+?^${}()|[\]\\]/g,
+    '\\$&'
+  );
+  const reg = new RegExp(`^${escapedPrefix}/\\d+(?:${escapedSuffix}|${escapedTrainingSuffix})?$`);
   return reg.test(String(pathname || ''));
 }
 
@@ -49,6 +58,9 @@ export default function App() {
   const userSyncReviewPath = normalizePath(routeConfig.userSyncReviewPath || '/user-sync-review');
   const competitionPathPrefix = normalizePath(routeConfig.competitionPathPrefix || '/competitions');
   const competitionRegisterSuffix = String(routeConfig.competitionRegisterSuffix || '/register').trim() || '/register';
+  const competitionTrainingManualSuffix = String(
+    routeConfig.competitionTrainingManualSuffix || '/training-manual'
+  ).trim() || '/training-manual';
   const [locationState, setLocationState] = useState(() => ({
     pathname: normalizePath(window.location.pathname),
     search: normalizeSearch(window.location.search),
@@ -82,8 +94,13 @@ export default function App() {
   const isAllowedPath = useCallback((pathname) => {
     if (allowedStaticPaths.has(pathname)) return true;
     if (isJudgeReviewPath(pathname, judgeReviewsPath)) return true;
-    return isCompetitionPath(pathname, competitionPathPrefix, competitionRegisterSuffix);
-  }, [allowedStaticPaths, competitionPathPrefix, competitionRegisterSuffix, judgeReviewsPath]);
+    return isCompetitionPath(
+      pathname,
+      competitionPathPrefix,
+      competitionRegisterSuffix,
+      competitionTrainingManualSuffix
+    );
+  }, [allowedStaticPaths, competitionPathPrefix, competitionRegisterSuffix, competitionTrainingManualSuffix, judgeReviewsPath]);
 
   const navigate = useCallback((targetPath, options = {}) => {
     const next = parseTargetLocation(targetPath);
@@ -134,6 +151,7 @@ export default function App() {
       userSyncReviewPath={userSyncReviewPath}
       competitionPathPrefix={competitionPathPrefix}
       competitionRegisterSuffix={competitionRegisterSuffix}
+      competitionTrainingManualSuffix={competitionTrainingManualSuffix}
       onNavigate={navigate}
     />
   );

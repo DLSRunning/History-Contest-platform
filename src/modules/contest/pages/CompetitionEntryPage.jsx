@@ -320,7 +320,6 @@ export default function CompetitionEntryPage({
                 <DetailItem label="最大参赛人数" value={String(detail.max_participants || '-')} />
                 <DetailItem label="当前报名人数" value={maxParticipants > 0 ? `${currentParticipants}/${maxParticipants}` : String(currentParticipants)} />
                 <DetailItem label="字数要求" value={`${detail.min_word_count || 0} ~ ${detail.max_word_count || 0}`} />
-                <DetailItem label="文件大小上限(MB)" value={String(detail.max_file_size_mb || '-')} />
                 <DetailItem label="报名状态" value={isRegistered ? '已报名' : (isRegistrationFull ? '报名人数已满' : '未报名')} />
               </Grid2>
             </Grid2>

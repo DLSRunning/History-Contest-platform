@@ -7,7 +7,7 @@
  *    - host: 复用宿主前端登录页（迁移推荐）
  * 2) auth.accessToken.*: access_token 注入规则（是否注入、从哪里读取、请求头名）
  * 3) api.contestApiPrefix: contest 后端接口前缀（默认 /api）
- * 4) route.loginPathPrefix/loginPageUrl/registerPathPrefix/registerPageUrl: 登录/注册路径与跳转地址
+ * 4) route.path_and_suffix: 登录/注册/比赛路由路径与后缀（含比赛手册后缀）
  * 5) agreement.*: 登录页用户协议配置（是否强制勾选、文案、协议内容）
  *
  * 说明：
@@ -89,6 +89,7 @@ const defaults = {
     userSyncReviewPath: '/user-sync-review',
     competitionPathPrefix: '/competitions',
     competitionRegisterSuffix: '/register',
+    competitionTrainingManualSuffix: '/training-manual',
   },
   agreement: {
     requiredOnLogin: true,
@@ -217,6 +218,11 @@ export const contestRuntimeConfig = {
       || env.VITE_CONTEST_COMPETITION_REGISTER_SUFFIX
       || defaults.route.competitionRegisterSuffix
     ).trim() || defaults.route.competitionRegisterSuffix,
+    competitionTrainingManualSuffix: String(
+      runtimeOverride?.route?.competitionTrainingManualSuffix
+      || env.VITE_CONTEST_COMPETITION_TRAINING_MANUAL_SUFFIX
+      || defaults.route.competitionTrainingManualSuffix
+    ).trim() || defaults.route.competitionTrainingManualSuffix,
   },
   agreement: {
     requiredOnLogin: asBool(
