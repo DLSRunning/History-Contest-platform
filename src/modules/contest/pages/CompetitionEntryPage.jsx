@@ -56,20 +56,76 @@ function statusOf(item) {
   return { key: 'ended', label: '结束', color: 'default' };
 }
 
-function normalizeAllowedFormats(value) {
-  const normalized = String(value || '')
+function normalizeAllowedFormats(value, fallbackFormats = ['pdf']) {
+  const normalizeTokens = (rawValue) => String(rawValue || '')
     .split(',')
     .map((item) => String(item || '').trim().toLowerCase().replace(/^\./, ''))
     .map((item) => {
       if (item === 'doc' || item === 'docx' || item === 'word') return 'docx';
+      if (item === 'xls' || item === 'xlsx' || item === 'excel') return 'xlsx';
       return item;
     })
-    .filter((item) => item === 'pdf' || item === 'docx');
-  return [...new Set(normalized.length ? normalized : ['pdf'])];
+    .filter((item) => item === 'pdf' || item === 'docx' || item === 'xlsx');
+  const normalized = [...new Set(normalizeTokens(value))];
+  if (normalized.length) return normalized;
+  return [...new Set(normalizeTokens(fallbackFormats))];
 }
 
 function normalizeAttachmentMode(value) {
   return String(value || '').trim().toLowerCase() === 'multiple' ? 'multiple' : 'single';
+}
+
+function normalizeSubmissionRuleMode(value) {
+  return String(value || '').trim().toLowerCase() === 'required_optional' ? 'required_optional' : 'legacy';
+}
+
+function canonicalFormatToken(value) {
+  const token = String(value || '').trim().toLowerCase().replace(/^\./, '');
+  if (!token) return '';
+  if (token === 'doc' || token === 'docx' || token === 'word') return 'docx';
+  if (token === 'xls' || token === 'xlsx' || token === 'excel') return 'xlsx';
+  return token;
+}
+
+function mergeFormatLists(requiredFormats = [], optionalFormats = [], fallbackFormats = []) {
+  const merged = [];
+  [requiredFormats, optionalFormats, fallbackFormats].forEach((source) => {
+    (source || []).forEach((fmt) => {
+      const token = canonicalFormatToken(fmt);
+      if (!token || merged.includes(token)) return;
+      merged.push(token);
+    });
+  });
+  return merged;
+}
+
+function resolveCompetitionFormatConfig(source = {}) {
+  const submissionRuleMode = normalizeSubmissionRuleMode(source?.submission_rule_mode);
+  const legacyAllowedFormats = normalizeAllowedFormats(source?.allowed_formats);
+  if (submissionRuleMode !== 'required_optional') {
+    const attachmentMode = normalizeAttachmentMode(source?.attachment_mode);
+    const requiredFormats = attachmentMode === 'multiple' ? legacyAllowedFormats : [];
+    const optionalFormats = attachmentMode === 'multiple' ? [] : legacyAllowedFormats;
+    return {
+      submission_rule_mode: 'legacy',
+      required_formats: requiredFormats,
+      optional_formats: optionalFormats,
+      allowed_formats: legacyAllowedFormats,
+      attachment_mode: attachmentMode,
+    };
+  }
+
+  let requiredFormats = normalizeAllowedFormats(source?.required_formats, []);
+  if (!requiredFormats.length) requiredFormats = legacyAllowedFormats;
+  const optionalFormats = normalizeAllowedFormats(source?.optional_formats, [])
+    .filter((fmt) => !requiredFormats.includes(fmt));
+  return {
+    submission_rule_mode: 'required_optional',
+    required_formats: requiredFormats,
+    optional_formats: optionalFormats,
+    allowed_formats: mergeFormatLists(requiredFormats, optionalFormats, legacyAllowedFormats),
+    attachment_mode: 'single',
+  };
 }
 
 function normalizeParticipantLimitMode(value) {
@@ -90,9 +146,20 @@ function competitionLimitText(item) {
 }
 
 function competitionAttachmentText(item) {
-  const formats = normalizeAllowedFormats(item?.allowed_formats).map((fmt) => fmt.toUpperCase()).join('、');
-  const mode = normalizeAttachmentMode(item?.attachment_mode) === 'multiple' ? '多附件' : '单附件';
-  return `${formats} ｜ ${mode}`;
+  const config = resolveCompetitionFormatConfig(item);
+  const mode = normalizeSubmissionRuleMode(config.submission_rule_mode);
+  if (mode === 'required_optional') {
+    const requiredText = config.required_formats.length
+      ? config.required_formats.map((fmt) => fmt.toUpperCase()).join('、')
+      : '无';
+    const optionalText = config.optional_formats.length
+      ? config.optional_formats.map((fmt) => fmt.toUpperCase()).join('、')
+      : '无';
+    return `必交：${requiredText} ｜ 选交：${optionalText}`;
+  }
+  const formats = config.allowed_formats.map((fmt) => fmt.toUpperCase()).join('、');
+  const legacyMode = normalizeAttachmentMode(config.attachment_mode) === 'multiple' ? '多附件' : '单附件';
+  return `${formats} ｜ ${legacyMode}`;
 }
 
 function canQuitCompetition(item) {

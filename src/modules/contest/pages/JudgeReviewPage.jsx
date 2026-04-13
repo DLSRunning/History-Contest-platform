@@ -123,6 +123,7 @@ export default function JudgeReviewPage({
   const [previewName, setPreviewName] = useState('');
   const [previewError, setPreviewError] = useState('');
   const [previewDocxSrcDoc, setPreviewDocxSrcDoc] = useState('');
+  const [previewDownloadUrl, setPreviewDownloadUrl] = useState('');
   const [scoreInput, setScoreInput] = useState('');
   const [commentInput, setCommentInput] = useState('');
   const [editingReviewed, setEditingReviewed] = useState(false);
@@ -165,8 +166,9 @@ export default function JudgeReviewPage({
   useEffect(() => {
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
+      if (previewDownloadUrl) URL.revokeObjectURL(previewDownloadUrl);
     };
-  }, [previewUrl]);
+  }, [previewDownloadUrl, previewUrl]);
 
   useEffect(() => {
     setEditingReviewed(false);
@@ -243,10 +245,12 @@ export default function JudgeReviewPage({
   useEffect(() => {
     if (!normalizedCompetitionId || !selectedSubmissionId) {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
+      if (previewDownloadUrl) URL.revokeObjectURL(previewDownloadUrl);
       setPreviewUrl('');
       setPreviewName('');
       setPreviewError('');
       setPreviewDocxSrcDoc('');
+      setPreviewDownloadUrl('');
       setScoreInput('');
       setCommentInput('');
       return;
@@ -273,12 +277,22 @@ export default function JudgeReviewPage({
             });
           } catch (pdfError) {
             if (getHttpStatus(pdfError) !== 404) throw pdfError;
-            attachmentResult = await getAssignedSubmissionAttachmentBlob(normalizedCompetitionId, selectedSubmissionId, {
-              requestId: createRequestId(),
-              disposition: 'inline',
-              attachmentExt: 'docx',
-            });
-            usedFormat = 'docx';
+            try {
+              attachmentResult = await getAssignedSubmissionAttachmentBlob(normalizedCompetitionId, selectedSubmissionId, {
+                requestId: createRequestId(),
+                disposition: 'inline',
+                attachmentExt: 'docx',
+              });
+              usedFormat = 'docx';
+            } catch (docxError) {
+              if (getHttpStatus(docxError) !== 404) throw docxError;
+              attachmentResult = await getAssignedSubmissionAttachmentBlob(normalizedCompetitionId, selectedSubmissionId, {
+                requestId: createRequestId(),
+                disposition: 'attachment',
+                attachmentExt: 'xlsx',
+              });
+              usedFormat = 'xlsx';
+            }
           }
         } catch (attachmentFetchError) {
           attachmentError = getUserFriendlyErrorText(attachmentFetchError, '加载作品附件失败');
@@ -289,8 +303,10 @@ export default function JudgeReviewPage({
         if (cancelled) return;
 
         if (previewUrl) URL.revokeObjectURL(previewUrl);
+        if (previewDownloadUrl) URL.revokeObjectURL(previewDownloadUrl);
         setPreviewUrl('');
         setPreviewDocxSrcDoc('');
+        setPreviewDownloadUrl('');
 
         const blob = attachmentResult?.blob || null;
         const fileName = attachmentResult?.fileName || `submission_${selectedSubmissionId}.${usedFormat}`;
@@ -313,13 +329,20 @@ export default function JudgeReviewPage({
             setPreviewDocxSrcDoc('');
             setPreviewError('');
           }
-        } else {
+        } else if (usedFormat === 'docx') {
           const { html, warnings } = await convertDocxBlobToHtml(blob);
           if (cancelled) return;
           setPreviewName(fileName);
           setPreviewUrl('');
           setPreviewDocxSrcDoc(buildDocxPreviewSrcDoc(fileName, html, warnings));
           setPreviewError('');
+        } else {
+          const downloadUrl = URL.createObjectURL(blob);
+          setPreviewName(fileName);
+          setPreviewUrl('');
+          setPreviewDocxSrcDoc('');
+          setPreviewDownloadUrl(downloadUrl);
+          setPreviewError('该作品为 Excel 附件，暂不支持在线预览，请点击“下载附件”查看。');
         }
 
         const review = reviewResult?.data || null;
@@ -328,10 +351,12 @@ export default function JudgeReviewPage({
       } catch (error) {
         if (!cancelled) {
           if (previewUrl) URL.revokeObjectURL(previewUrl);
+          if (previewDownloadUrl) URL.revokeObjectURL(previewDownloadUrl);
           setPreviewUrl('');
           setPreviewName('');
           setPreviewError(getUserFriendlyErrorText(error, '加载作品详情失败'));
           setPreviewDocxSrcDoc('');
+          setPreviewDownloadUrl('');
         }
       } finally {
         if (!cancelled) setDetailLoading(false);
@@ -342,6 +367,17 @@ export default function JudgeReviewPage({
       cancelled = true;
     };
   }, [normalizedCompetitionId, selectedSubmissionId]);
+
+  const handleDownloadPreviewAttachment = () => {
+    if (!previewDownloadUrl) return;
+    const link = document.createElement('a');
+    link.href = previewDownloadUrl;
+    link.download = previewName || 'submission';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const saveReview = async () => {
     if (!normalizedCompetitionId || !selectedSubmissionId) return;
@@ -613,6 +649,11 @@ export default function JudgeReviewPage({
                 <Typography variant="subtitle2" sx={{ color: '#4e2f7f', fontWeight: 700 }}>
                   {selectedRow ? `作品：${selectedRow.title || `#${selectedRow.submission_id}`}` : '请选择作品'}
                 </Typography>
+                {previewDownloadUrl ? (
+                  <Button size="small" variant="outlined" onClick={handleDownloadPreviewAttachment}>
+                    下载附件
+                  </Button>
+                ) : null}
               </Stack>
               <Box sx={{ border: '1px solid #e9def8', borderRadius: 1.5, overflow: 'hidden', background: '#fff' }}>
                 {detailLoading ? (

@@ -123,6 +123,9 @@ const EMPTY_FORM = {
   major: '',
   grade: [],
   registration_code_required: false,
+  submission_rule_mode: 'required_optional',
+  required_formats: ['pdf'],
+  optional_formats: [],
   allowed_formats: ['pdf'],
   attachment_mode: 'single',
   min_word_count: 500,
@@ -146,7 +149,7 @@ const EMPTY_PROFILE_FORM = {
   bio: '',
 };
 
-const ALLOWED_FORMAT_OPTIONS = ['pdf', 'docx'];
+const ALLOWED_FORMAT_OPTIONS = ['pdf', 'docx', 'xlsx'];
 const MAJOR_CATEGORY_OPTIONS = [
   '中国古代史',
   '中国近现代史',
@@ -222,22 +225,73 @@ function toFormatList(value) {
     .filter(Boolean);
 }
 
-function normalizeAllowedFormats(value) {
-  const normalized = toFormatList(value)
+function normalizeAllowedFormats(value, fallbackFormats = ['pdf']) {
+  const normalizeTokens = (rawValue) => toFormatList(rawValue)
     .map((item) => String(item || '').trim().toLowerCase().replace(/^\./, ''))
     .map((token) => {
       if (token === 'doc' || token === 'docx' || token === 'word') return 'docx';
+      if (token === 'xls' || token === 'xlsx' || token === 'excel') return 'xlsx';
       return token;
     })
-    .filter((token) => token === 'pdf' || token === 'docx')
+    .filter((token) => token === 'pdf' || token === 'docx' || token === 'xlsx')
     .filter(Boolean);
-  const deduped = [...new Set(normalized)];
-  return deduped.length ? deduped : ['pdf'];
+  const deduped = [...new Set(normalizeTokens(value))];
+  if (deduped.length) return deduped;
+  return [...new Set(normalizeTokens(fallbackFormats))];
 }
 
 function normalizeAttachmentMode(value) {
   const token = String(value || '').trim().toLowerCase();
   return token === 'multiple' ? 'multiple' : 'single';
+}
+
+function normalizeSubmissionRuleMode(value) {
+  const token = String(value || '').trim().toLowerCase();
+  return token === 'required_optional' ? 'required_optional' : 'legacy';
+}
+
+function mergeFormatLists(requiredFormats = [], optionalFormats = [], fallbackFormats = []) {
+  const merged = [];
+  [requiredFormats, optionalFormats, fallbackFormats].forEach((source) => {
+    (source || []).forEach((fmt) => {
+      const token = canonicalFormatToken(fmt);
+      if (!token) return;
+      if (!merged.includes(token)) merged.push(token);
+    });
+  });
+  return merged;
+}
+
+function resolveCompetitionFormatConfig(source = {}) {
+  const submissionRuleMode = normalizeSubmissionRuleMode(source?.submission_rule_mode);
+  const legacyAllowedFormats = normalizeAllowedFormats(source?.allowed_formats);
+  if (submissionRuleMode !== 'required_optional') {
+    const attachmentMode = normalizeAttachmentMode(source?.attachment_mode);
+    const requiredFormats = attachmentMode === 'multiple' ? legacyAllowedFormats : [];
+    const optionalFormats = attachmentMode === 'multiple' ? [] : legacyAllowedFormats;
+    return {
+      submission_rule_mode: 'legacy',
+      required_formats: requiredFormats,
+      optional_formats: optionalFormats,
+      allowed_formats: legacyAllowedFormats,
+      attachment_mode: attachmentMode,
+    };
+  }
+
+  let requiredFormats = normalizeAllowedFormats(source?.required_formats, []);
+  const optionalFormatsRaw = normalizeAllowedFormats(source?.optional_formats, []);
+  if (!requiredFormats.length) {
+    requiredFormats = legacyAllowedFormats;
+  }
+  const optionalFormats = optionalFormatsRaw.filter((fmt) => !requiredFormats.includes(fmt));
+  const allowedFormats = mergeFormatLists(requiredFormats, optionalFormats, legacyAllowedFormats);
+  return {
+    submission_rule_mode: 'required_optional',
+    required_formats: requiredFormats,
+    optional_formats: optionalFormats,
+    allowed_formats: allowedFormats,
+    attachment_mode: 'single',
+  };
 }
 
 function normalizeParticipantLimitMode(value) {
@@ -381,6 +435,7 @@ function canonicalFormatToken(value) {
   const token = String(value || '').trim().toLowerCase().replace(/^\./, '');
   if (!token) return '';
   if (token === 'doc' || token === 'docx' || token === 'word') return 'docx';
+  if (token === 'xls' || token === 'xlsx' || token === 'excel') return 'xlsx';
   return token;
 }
 
@@ -412,7 +467,18 @@ function toAttachmentPayload(meta) {
 
 function getSubmissionFileAccept(allowedFormats) {
   const formats = normalizeAllowedFormats(allowedFormats);
-  return formats.map((fmt) => `.${fmt}`).join(',');
+  const byFormat = {
+    pdf: ['.pdf'],
+    docx: ['.docx'],
+    xlsx: ['.xlsx', '.xls'],
+  };
+  const extList = formats.flatMap((fmt) => byFormat[fmt] || [`.${fmt}`]);
+  return [...new Set(extList)].join(',');
+}
+
+function formatUploadExtHint(format) {
+  if (format === 'xlsx') return '.xls 或 .xlsx';
+  return `.${format}`;
 }
 
 function submissionStatusLabel(value) {
@@ -511,11 +577,22 @@ function registrationCodeRequired(item) {
 }
 
 function competitionAttachmentText(item) {
-  const formats = normalizeAllowedFormats(item?.allowed_formats).map((fmt) => fmt.toUpperCase()).join('、');
-  const mode = normalizeAttachmentMode(item?.attachment_mode) === 'multiple'
+  const config = resolveCompetitionFormatConfig(item);
+  const mode = normalizeSubmissionRuleMode(config.submission_rule_mode);
+  if (mode === 'required_optional') {
+    const requiredText = config.required_formats.length
+      ? config.required_formats.map((fmt) => fmt.toUpperCase()).join('、')
+      : '无';
+    const optionalText = config.optional_formats.length
+      ? config.optional_formats.map((fmt) => fmt.toUpperCase()).join('、')
+      : '无';
+    return `必交：${requiredText} ｜ 选交：${optionalText}`;
+  }
+  const formats = config.allowed_formats.map((fmt) => fmt.toUpperCase()).join('、');
+  const legacyMode = normalizeAttachmentMode(config.attachment_mode) === 'multiple'
     ? '多附件'
     : '单附件';
-  return `${formats} ｜ ${mode}`;
+  return `${formats} ｜ ${legacyMode}`;
 }
 
 function userSyncReviewStatusLabel(status) {
@@ -630,6 +707,10 @@ function loadDashboardViewState() {
 
 function buildPayload(form) {
   const attachmentMode = normalizeAttachmentMode(form.attachment_mode);
+  const submissionRuleMode = normalizeSubmissionRuleMode(form.submission_rule_mode);
+  const requiredFormats = normalizeAllowedFormats(form.required_formats, []);
+  const optionalFormats = normalizeAllowedFormats(form.optional_formats, []).filter((fmt) => !requiredFormats.includes(fmt));
+  const allowedFormats = mergeFormatLists(requiredFormats, optionalFormats, normalizeAllowedFormats(form.allowed_formats));
   const participantLimitMode = normalizeParticipantLimitMode(form.participant_limit_mode);
   const gradeLimits = normalizeGradeLimitList(form.grade);
   return {
@@ -652,8 +733,11 @@ function buildPayload(form) {
       grade: participantLimitMode === 'in_school' ? gradeLimits.join(',') : '',
       registration_code_required: Boolean(form.registration_code_required),
       registration_code: '',
-      allowed_formats: normalizeAllowedFormats(form.allowed_formats),
-      attachment_mode: attachmentMode,
+      submission_rule_mode: submissionRuleMode,
+      required_formats: submissionRuleMode === 'required_optional' ? requiredFormats : [],
+      optional_formats: submissionRuleMode === 'required_optional' ? optionalFormats : [],
+      allowed_formats: allowedFormats,
+      attachment_mode: submissionRuleMode === 'required_optional' ? 'single' : attachmentMode,
       min_word_count: Number(form.min_word_count),
       max_word_count: Number(form.max_word_count),
       max_file_size_mb: Number(form.max_file_size_mb),
@@ -698,7 +782,16 @@ function validateForm(form) {
   const errors = {};
   if (!form.name.trim()) errors.name = '比赛名称不能为空';
   if (!form.registration_start) errors.registration_start = '请填写报名开始时间';
-  if (!toFormatList(form.allowed_formats).length) errors.allowed_formats = '请至少选择一种允许格式';
+  const submissionRuleMode = normalizeSubmissionRuleMode(form.submission_rule_mode);
+  const requiredFormats = normalizeAllowedFormats(form.required_formats, []);
+  const optionalFormats = normalizeAllowedFormats(form.optional_formats, []);
+  if (submissionRuleMode === 'required_optional') {
+    if (!requiredFormats.length) errors.required_formats = '请至少选择一种必交格式';
+    const overlap = optionalFormats.filter((fmt) => requiredFormats.includes(fmt));
+    if (overlap.length) errors.optional_formats = '选交格式不能与必交格式重复';
+  } else if (!toFormatList(form.allowed_formats).length) {
+    errors.allowed_formats = '请至少选择一种允许格式';
+  }
 
   const maxParticipants = parseIntegerFieldValue(form.max_participants);
   if (!maxParticipants.ok) {
@@ -955,10 +1048,11 @@ function DateTimeField({
 }
 
 function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
-  const selectedFormats = normalizeAllowedFormats(form.allowed_formats);
+  const selectedRequiredFormats = normalizeAllowedFormats(form.required_formats, []);
+  const selectedOptionalFormats = normalizeAllowedFormats(form.optional_formats, [])
+    .filter((fmt) => !selectedRequiredFormats.includes(fmt));
   const selectedGradeLimits = normalizeGradeLimitList(form.grade);
   const gradeLimitOptions = [...new Set([...GRADE_OPTIONS, ...selectedGradeLimits])];
-  const attachmentMode = normalizeAttachmentMode(form.attachment_mode);
   const optionalTimelineKeys = COMPETITION_OPTIONAL_TIMELINE_FIELDS.map((field) => field.key);
   const timelineModes = form?._timeline_modes && typeof form._timeline_modes === 'object'
     ? form._timeline_modes
@@ -967,11 +1061,11 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
   const firstPendingIndex = optionalTimelineKeys.findIndex((key) => getTimelineMode(key) === 'pending');
   const set = (k) => (e) => {
     const rawValue = e.target.value;
-    const value = k === 'allowed_formats'
+    const value = (k === 'allowed_formats' || k === 'required_formats' || k === 'optional_formats')
       ? (Array.isArray(rawValue) ? rawValue : String(rawValue || '').split(',').map((s) => s.trim()).filter(Boolean))
       : k === 'grade'
         ? normalizeGradeLimitList(rawValue)
-      : rawValue;
+        : rawValue;
     if (setErrors) {
       setErrors((prev) => {
         const next = { ...prev };
@@ -988,6 +1082,33 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
       });
     }
     setForm((prev) => {
+      if (k === 'required_formats') {
+        const nextRequiredFormats = normalizeAllowedFormats(value, []);
+        const nextOptionalFormats = normalizeAllowedFormats(prev.optional_formats, []).filter(
+          (fmt) => !nextRequiredFormats.includes(fmt),
+        );
+        return {
+          ...prev,
+          submission_rule_mode: 'required_optional',
+          required_formats: nextRequiredFormats,
+          optional_formats: nextOptionalFormats,
+          allowed_formats: mergeFormatLists(nextRequiredFormats, nextOptionalFormats),
+          attachment_mode: 'single',
+        };
+      }
+      if (k === 'optional_formats') {
+        const currentRequiredFormats = normalizeAllowedFormats(prev.required_formats, []);
+        const nextOptionalFormats = normalizeAllowedFormats(value, []).filter(
+          (fmt) => !currentRequiredFormats.includes(fmt),
+        );
+        return {
+          ...prev,
+          submission_rule_mode: 'required_optional',
+          optional_formats: nextOptionalFormats,
+          allowed_formats: mergeFormatLists(currentRequiredFormats, nextOptionalFormats),
+          attachment_mode: 'single',
+        };
+      }
       if (k === 'team_mode') {
         if (value === 'individual') {
           return { ...prev, team_mode: value, min_team_size: 1, max_team_size: 1 };
@@ -1195,43 +1316,61 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
         </Grid2>
 
         <Grid2 size={4}>
-          <FormControl fullWidth error={!!errors.allowed_formats}>
-            <InputLabel>允许格式(可多选)</InputLabel>
+          <FormControl fullWidth error={!!errors.required_formats}>
+            <InputLabel>必交格式(可多选)</InputLabel>
             <Select
               multiple
-              label="允许格式(可多选)"
-              value={selectedFormats}
-              onChange={set('allowed_formats')}
+              label="必交格式(可多选)"
+              value={selectedRequiredFormats}
+              onChange={set('required_formats')}
               renderValue={(selected) => (Array.isArray(selected) ? selected.join(', ') : '')}
             >
               {ALLOWED_FORMAT_OPTIONS.map((fmt) => (
-                <MenuItem key={fmt} value={fmt}>
+                <MenuItem key={`required_${fmt}`} value={fmt}>
                   <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Box sx={{ textTransform: 'lowercase', fontWeight: selectedFormats.includes(fmt) ? 700 : 500 }}>{fmt}</Box>
+                    <Box sx={{ textTransform: 'lowercase', fontWeight: selectedRequiredFormats.includes(fmt) ? 700 : 500 }}>{fmt}</Box>
                     <CheckCircleRoundedIcon
                       fontSize="small"
                       sx={{
                         color: 'success.main',
-                        opacity: selectedFormats.includes(fmt) ? 1 : 0,
+                        opacity: selectedRequiredFormats.includes(fmt) ? 1 : 0,
                       }}
                     />
                   </Box>
                 </MenuItem>
               ))}
             </Select>
-            {!!errors.allowed_formats && <FormHelperText>{errors.allowed_formats}</FormHelperText>}
-            {!errors.allowed_formats && <FormHelperText>当前支持 PDF、DOCX，可多选</FormHelperText>}
+            {!!errors.required_formats && <FormHelperText>{errors.required_formats}</FormHelperText>}
+            {!errors.required_formats && <FormHelperText>提交时必须全部上传。</FormHelperText>}
           </FormControl>
         </Grid2>
-        <Grid2 size={3}>
-          <FormControl fullWidth error={!!errors.attachment_mode}>
-            <InputLabel>附件模式</InputLabel>
-            <Select label="附件模式" value={attachmentMode} onChange={set('attachment_mode')}>
-              <MenuItem value="single">单附件（提交任一允许格式即可）</MenuItem>
-              <MenuItem value="multiple">多附件（需提交全部允许格式）</MenuItem>
+        <Grid2 size={4}>
+          <FormControl fullWidth error={!!errors.optional_formats}>
+            <InputLabel>选交格式(可多选)</InputLabel>
+            <Select
+              multiple
+              label="选交格式(可多选)"
+              value={selectedOptionalFormats}
+              onChange={set('optional_formats')}
+              renderValue={(selected) => (Array.isArray(selected) ? selected.join(', ') : '')}
+            >
+              {ALLOWED_FORMAT_OPTIONS.map((fmt) => (
+                <MenuItem key={`optional_${fmt}`} value={fmt} disabled={selectedRequiredFormats.includes(fmt)}>
+                  <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Box sx={{ textTransform: 'lowercase', fontWeight: selectedOptionalFormats.includes(fmt) ? 700 : 500 }}>{fmt}</Box>
+                    <CheckCircleRoundedIcon
+                      fontSize="small"
+                      sx={{
+                        color: 'success.main',
+                        opacity: selectedOptionalFormats.includes(fmt) ? 1 : 0,
+                      }}
+                    />
+                  </Box>
+                </MenuItem>
+              ))}
             </Select>
-            {!!errors.attachment_mode && <FormHelperText>{errors.attachment_mode}</FormHelperText>}
-            {!errors.attachment_mode && <FormHelperText>默认单附件；多附件模式下将强制每种允许格式都要上传。</FormHelperText>}
+            {!!errors.optional_formats && <FormHelperText>{errors.optional_formats}</FormHelperText>}
+            {!errors.optional_formats && <FormHelperText>与必交格式配套使用：选交格式可不提交，也可提交任意个。</FormHelperText>}
           </FormControl>
         </Grid2>
         <Grid2 size={2}><TextField type="number" fullWidth label="最小字数" value={form.min_word_count} onChange={set('min_word_count')} error={!!errors.min_word_count} helperText={errors.min_word_count} slotProps={{ input: { ...integerInputBase, min: 1, max: MAX_UINT32, step: 1 } }} /></Grid2>
@@ -1416,10 +1555,11 @@ function Dashboard({
   const [editForm, setEditForm] = useState(() => {
     const savedEditForm = persistedViewState.editForm;
     if (!savedEditForm) return EMPTY_FORM;
+    const formatConfig = resolveCompetitionFormatConfig(savedEditForm);
     return {
       ...EMPTY_FORM,
       ...savedEditForm,
-      allowed_formats: normalizeAllowedFormats(savedEditForm.allowed_formats),
+      ...formatConfig,
     };
   });
   const [editErrors, setEditErrors] = useState({});
@@ -1536,24 +1676,50 @@ function Dashboard({
   const submissionMaxModifications = Math.max(0, Number(submissionTarget?.max_modifications ?? detailData?.max_modifications ?? 0) || 0);
   const submissionUsedModifications = Math.max(0, Number(submissionExisting?.modification_count || 0) || 0);
   const submissionRemainingModifications = Math.max(0, submissionMaxModifications - submissionUsedModifications);
-  const submissionAttachmentMode = normalizeAttachmentMode(submissionTarget?.attachment_mode);
+  const submissionFormatConfig = useMemo(
+    () => resolveCompetitionFormatConfig(submissionTarget || {}),
+    [
+      submissionTarget?.submission_rule_mode,
+      submissionTarget?.required_formats,
+      submissionTarget?.optional_formats,
+      submissionTarget?.allowed_formats,
+      submissionTarget?.attachment_mode,
+    ]
+  );
+  const submissionRuleMode = normalizeSubmissionRuleMode(submissionFormatConfig.submission_rule_mode);
+  const submissionAttachmentMode = normalizeAttachmentMode(submissionFormatConfig.attachment_mode);
   const submissionAllowedFormats = useMemo(
-    () => normalizeAllowedFormats(submissionTarget?.allowed_formats),
-    [submissionTarget?.allowed_formats]
+    () => normalizeAllowedFormats(submissionFormatConfig.allowed_formats),
+    [submissionFormatConfig.allowed_formats]
   );
   const submissionRequiredFormats = useMemo(
-    () => (submissionAttachmentMode === 'multiple' ? submissionAllowedFormats : []),
-    [submissionAttachmentMode, submissionAllowedFormats]
+    () => normalizeAllowedFormats(submissionFormatConfig.required_formats, []),
+    [submissionFormatConfig.required_formats]
   );
+  const submissionOptionalFormats = useMemo(
+    () => normalizeAllowedFormats(submissionFormatConfig.optional_formats, []).filter((fmt) => !submissionRequiredFormats.includes(fmt)),
+    [submissionFormatConfig.optional_formats, submissionRequiredFormats]
+  );
+  const submissionUseFormatSlots = submissionRuleMode === 'required_optional' || submissionAttachmentMode === 'multiple';
   const submissionPrimaryFormat = useMemo(() => {
-    if (submissionAttachmentMode !== 'multiple') return '';
-    if (submissionRequiredFormats.includes('pdf')) return 'pdf';
-    return submissionRequiredFormats[0] || '';
-  }, [submissionAttachmentMode, submissionRequiredFormats]);
+    if (!submissionUseFormatSlots) return '';
+    const preferredFormats = mergeFormatLists(
+      submissionRequiredFormats,
+      submissionOptionalFormats,
+      submissionAllowedFormats,
+    );
+    if (preferredFormats.includes('pdf')) return 'pdf';
+    return preferredFormats[0] || '';
+  }, [
+    submissionUseFormatSlots,
+    submissionRequiredFormats,
+    submissionOptionalFormats,
+    submissionAllowedFormats,
+  ]);
   const submissionPrimaryFile = useMemo(() => {
-    if (submissionAttachmentMode !== 'multiple') return submissionFile;
+    if (!submissionUseFormatSlots) return submissionFile;
     return submissionPrimaryFormat ? (submissionFilesByFormat[submissionPrimaryFormat] || null) : null;
-  }, [submissionAttachmentMode, submissionPrimaryFormat, submissionFilesByFormat, submissionFile]);
+  }, [submissionUseFormatSlots, submissionPrimaryFormat, submissionFilesByFormat, submissionFile]);
   const submissionAttachmentName = submissionPrimaryFile?.name || submissionAttachment?.attachment_name || '';
   const hasSubmissionAttachment = Boolean(submissionPrimaryFile || submissionAttachment);
   const submissionAttachmentMenuOpen = Boolean(submissionAttachmentMenuAnchor);
@@ -2548,6 +2714,7 @@ function Dashboard({
 
     setEditTarget(source);
     setEditErrors({});
+    const formatConfig = resolveCompetitionFormatConfig(source);
     setEditForm({
       ...EMPTY_FORM,
       ...source,
@@ -2563,8 +2730,7 @@ function Dashboard({
       major: '',
       grade: normalizeGradeLimitList(source.grade),
       registration_code_required: registrationCodeRequired(source),
-      allowed_formats: normalizeAllowedFormats(source.allowed_formats),
-      attachment_mode: normalizeAttachmentMode(source.attachment_mode),
+      ...formatConfig,
     });
     setEditOpen(true);
   };
@@ -2710,12 +2876,24 @@ function Dashboard({
     const errors = {};
     const title = String(submissionForm.title || '').trim();
     if (!title) errors.title = '作品标题不能为空';
-    const allowedFormats = normalizeAllowedFormats(submissionTarget?.allowed_formats).map((item) => canonicalFormatToken(item));
-    const attachmentMode = normalizeAttachmentMode(submissionTarget?.attachment_mode);
-    if (attachmentMode === 'multiple') {
-      const missingFormats = allowedFormats.filter((fmt) => !submissionFilesByFormat[fmt] && !submissionExistingAttachmentMap[fmt]);
-      if (missingFormats.length) {
-        errors.file = `当前为多附件模式，需补充：${missingFormats.join('、')}`;
+    const submissionConfig = resolveCompetitionFormatConfig(submissionTarget || {});
+    const activeSubmissionRuleMode = normalizeSubmissionRuleMode(submissionConfig.submission_rule_mode);
+    const activeAttachmentMode = normalizeAttachmentMode(submissionConfig.attachment_mode);
+    const requiredFormats = normalizeAllowedFormats(submissionConfig.required_formats, []).map((item) => canonicalFormatToken(item));
+    const optionalFormats = normalizeAllowedFormats(submissionConfig.optional_formats, [])
+      .map((item) => canonicalFormatToken(item))
+      .filter((fmt) => !requiredFormats.includes(fmt));
+    const allowedFormats = mergeFormatLists(
+      requiredFormats,
+      optionalFormats,
+      normalizeAllowedFormats(submissionConfig.allowed_formats),
+    ).map((item) => canonicalFormatToken(item));
+    const useFormatSlots = activeSubmissionRuleMode === 'required_optional' || activeAttachmentMode === 'multiple';
+
+    if (useFormatSlots) {
+      const missingRequired = requiredFormats.filter((fmt) => !submissionFilesByFormat[fmt] && !submissionExistingAttachmentMap[fmt]);
+      if (missingRequired.length) {
+        errors.file = `当前规则有必交格式，需补充：${missingRequired.join('、')}`;
       }
       allowedFormats.forEach((fmt) => {
         const file = submissionFilesByFormat[fmt];
@@ -2726,7 +2904,7 @@ function Dashboard({
           return;
         }
         if (selectedExt !== fmt) {
-          errors.file = `${fmt.toUpperCase()} 附件格式不匹配，请上传 .${fmt} 文件`;
+          errors.file = `${fmt.toUpperCase()} 附件格式不匹配，请上传 ${formatUploadExtHint(fmt)} 文件`;
           return;
         }
       });
@@ -2736,7 +2914,7 @@ function Dashboard({
       if (submissionFile && !selectedExt) {
         errors.file = '附件缺少后缀名，请重新选择文件';
       } else if (submissionFile && allowedFormats.length && !allowedFormats.includes(canonicalFormatToken(selectedExt))) {
-        errors.file = `附件格式不符合要求，仅支持：${normalizeAllowedFormats(submissionTarget?.allowed_formats).join('、')}`;
+        errors.file = `附件格式不符合要求，仅支持：${allowedFormats.join('、')}`;
       }
     }
 
@@ -2750,10 +2928,22 @@ function Dashboard({
     try {
       let attachmentMeta = null;
       let multiAttachmentMetas = [];
-      if (attachmentMode === 'multiple') {
+      let attachmentFormatsForPayload = [];
+      if (useFormatSlots) {
+        attachmentFormatsForPayload = activeSubmissionRuleMode === 'required_optional'
+          ? allowedFormats.filter((fmt) => (
+            requiredFormats.includes(fmt)
+            || Boolean(submissionFilesByFormat[fmt])
+            || Boolean(submissionExistingAttachmentMap[fmt])
+          ))
+          : allowedFormats;
+        if (!attachmentFormatsForPayload.length) {
+          throw new Error('请至少选择一个附件后再提交');
+        }
+
         const attachmentMetaByExt = {};
-        for (let index = 0; index < allowedFormats.length; index += 1) {
-          const fmt = allowedFormats[index];
+        for (let index = 0; index < attachmentFormatsForPayload.length; index += 1) {
+          const fmt = attachmentFormatsForPayload[index];
           const file = submissionFilesByFormat[fmt];
           if (file) {
             const { data } = await uploadSubmissionAttachment(competitionId, file, {
@@ -2763,7 +2953,7 @@ function Dashboard({
                 const loaded = Number(event?.loaded || 0);
                 if (total <= 0) return;
                 const part = Math.min(1, Math.max(0, loaded / total));
-                const percent = Math.min(100, Math.max(0, Math.round(((index + part) / allowedFormats.length) * 100)));
+                const percent = Math.min(100, Math.max(0, Math.round(((index + part) / attachmentFormatsForPayload.length) * 100)));
                 setSubmissionProgress({ mode: 'uploading', percent });
               },
             });
@@ -2785,8 +2975,8 @@ function Dashboard({
             attachment_ext: existingExt,
           };
         }
-        multiAttachmentMetas = allowedFormats.map((fmt) => attachmentMetaByExt[fmt]).filter(Boolean);
-        if (multiAttachmentMetas.length !== allowedFormats.length) {
+        multiAttachmentMetas = attachmentFormatsForPayload.map((fmt) => attachmentMetaByExt[fmt]).filter(Boolean);
+        if (multiAttachmentMetas.length !== attachmentFormatsForPayload.length) {
           throw new Error('附件上传不完整，请重新选择后再试');
         }
         attachmentMeta = multiAttachmentMetas.find((meta) => canonicalFormatToken(meta.attachment_ext || '') === 'pdf') || multiAttachmentMetas[0];
@@ -2821,7 +3011,7 @@ function Dashboard({
         attachment_size: attachmentMeta?.attachment_size ?? null,
         attachment_hash: attachmentMeta?.attachment_hash || null,
         team_name: null,
-        extra_meta: attachmentMode === 'multiple'
+        extra_meta: useFormatSlots
           ? { source: 'contest_front', attachments: attachmentPayloadList }
           : { source: 'contest_front' },
       };
@@ -2838,7 +3028,7 @@ function Dashboard({
       const successText = submitMessage || (isResubmitByServer ? '作品修改提交成功' : '作品提交成功');
       const normalizedAttachmentPayloadList = attachmentPayloadList.map((item) => normalizeAttachmentMeta(item)).filter(Boolean);
       const mergedRow = latestRow ? { ...latestRow } : null;
-      if (mergedRow && attachmentMode === 'multiple' && normalizedAttachmentPayloadList.length) {
+      if (mergedRow && useFormatSlots && normalizedAttachmentPayloadList.length) {
         const nextExtraMeta = {
           ...(mergedRow.extra_meta && typeof mergedRow.extra_meta === 'object' ? mergedRow.extra_meta : {}),
           source: 'contest_front',
@@ -5315,8 +5505,9 @@ function Dashboard({
               </Alert>
 
               <Typography variant="body2" color="text.secondary">
-                附件格式：{normalizeAllowedFormats(submissionTarget?.allowed_formats).join('、')}；
-                附件模式：{submissionAttachmentMode === 'multiple' ? '多附件（需全部格式）' : '单附件（任一格式）'}；
+                {submissionRuleMode === 'required_optional'
+                  ? `必交格式：${submissionRequiredFormats.length ? submissionRequiredFormats.map((fmt) => fmt.toUpperCase()).join('、') : '无'}；选交格式：${submissionOptionalFormats.length ? submissionOptionalFormats.map((fmt) => fmt.toUpperCase()).join('、') : '无'}；`
+                  : `附件格式：${submissionAllowedFormats.map((fmt) => fmt.toUpperCase()).join('、')}；附件模式：${submissionAttachmentMode === 'multiple' ? '多附件（需全部格式）' : '单附件（任一格式）'}；`}
                 字数范围：{submissionTarget?.min_word_count || 0} ~ {submissionTarget?.max_word_count || 0}；
                 剩余可修改次数：{submissionRemainingModifications}。
               </Typography>
@@ -5341,21 +5532,23 @@ function Dashboard({
                 onChange={(e) => setSubmissionForm((prev) => ({ ...prev, work_description: e.target.value }))}
               />
 
-              {submissionAttachmentMode === 'multiple' ? (
+              {submissionUseFormatSlots ? (
                 <Stack spacing={1}>
                   {submissionAllowedFormats.map((fmt) => {
                     const selectedFile = submissionFilesByFormat[fmt] || null;
                     const existingMeta = submissionExistingAttachmentMap[fmt] || null;
                     const hasAttachment = Boolean(selectedFile || existingMeta);
                     const attachmentName = selectedFile?.name || existingMeta?.attachment_name || `${fmt.toUpperCase()}附件`;
+                    const isRequiredFormat = submissionRequiredFormats.includes(fmt);
+                    const formatTag = isRequiredFormat ? '（必交）' : '（选交）';
                     return (
                       <Stack key={fmt} direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                         <Button variant="outlined" component="label">
-                          选择{fmt.toUpperCase()}附件
+                          选择{fmt.toUpperCase()}附件{formatTag}
                           <input
                             hidden
                             type="file"
-                            accept={`.${fmt}`}
+                            accept={getSubmissionFileAccept([fmt])}
                             onChange={(e) => {
                               const file = e.target.files?.[0] || null;
                               setSubmissionFilesByFormat((prev) => ({ ...prev, [fmt]: file }));
@@ -5463,13 +5656,17 @@ function Dashboard({
                             )}
                           </Box>
                         ) : (
-                          <Typography variant="body2" color="error.main">未选择</Typography>
+                          <Typography variant="body2" color={isRequiredFormat ? 'error.main' : 'text.secondary'}>
+                            {isRequiredFormat ? '未选择（必交）' : '未选择（选交，可留空）'}
+                          </Typography>
                         )}
                       </Stack>
                     );
                   })}
                   <FormHelperText sx={{ m: 0 }}>
-                    多附件模式下，必须为每种允许格式各提交一个附件。
+                    {submissionRuleMode === 'required_optional'
+                      ? '必交格式必须全部上传；选交格式可不提交，也可按需提交。'
+                      : '多附件模式下，必须为每种允许格式各提交一个附件。'}
                   </FormHelperText>
                 </Stack>
               ) : (
@@ -5479,7 +5676,7 @@ function Dashboard({
                     <input
                       hidden
                       type="file"
-                      accept={getSubmissionFileAccept(submissionTarget?.allowed_formats)}
+                      accept={getSubmissionFileAccept(submissionAllowedFormats)}
                       onChange={(e) => {
                         const file = e.target.files?.[0] || null;
                         setSubmissionFile(file);
