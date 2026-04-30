@@ -713,6 +713,10 @@ function buildPayload(form) {
   const allowedFormats = mergeFormatLists(requiredFormats, optionalFormats, normalizeAllowedFormats(form.allowed_formats));
   const participantLimitMode = normalizeParticipantLimitMode(form.participant_limit_mode);
   const gradeLimits = normalizeGradeLimitList(form.grade);
+  const rawMaxFileSizeMb = Number(form.max_file_size_mb);
+  const maxFileSizeMb = Number.isFinite(rawMaxFileSizeMb) && rawMaxFileSizeMb > 0
+    ? Math.floor(rawMaxFileSizeMb)
+    : estimateMaxFileSizeMb(form.max_word_count);
   return {
     competition_info: {
       name: form.name.trim(),
@@ -740,7 +744,7 @@ function buildPayload(form) {
       attachment_mode: submissionRuleMode === 'required_optional' ? 'single' : attachmentMode,
       min_word_count: Number(form.min_word_count),
       max_word_count: Number(form.max_word_count),
-      max_file_size_mb: Number(form.max_file_size_mb),
+      max_file_size_mb: maxFileSizeMb,
       max_modifications: Number(form.max_modifications),
       show_ranking: Number(form.show_ranking),
       ranking_visibility: form.ranking_visibility,
@@ -809,15 +813,6 @@ function validateForm(form) {
     errors.max_modifications = '数值过大';
   } else if (maxModifications.value <= 0n) {
     errors.max_modifications = '必须大于0';
-  }
-
-  const maxFileSizeMb = parseIntegerFieldValue(form.max_file_size_mb);
-  if (!maxFileSizeMb.ok) {
-    errors.max_file_size_mb = '请输入有效整数';
-  } else if (maxFileSizeMb.value > MAX_UINT32_BIGINT) {
-    errors.max_file_size_mb = '数值过大';
-  } else if (maxFileSizeMb.value <= 0n) {
-    errors.max_file_size_mb = '必须大于0';
   }
 
   const minWordCount = parseIntegerFieldValue(form.min_word_count);
@@ -1375,7 +1370,6 @@ function CompetitionForm({ form, setForm, errors = {}, setErrors }) {
         </Grid2>
         <Grid2 size={2}><TextField type="number" fullWidth label="最小字数" value={form.min_word_count} onChange={set('min_word_count')} error={!!errors.min_word_count} helperText={errors.min_word_count} slotProps={{ input: { ...integerInputBase, min: 1, max: MAX_UINT32, step: 1 } }} /></Grid2>
         <Grid2 size={2}><TextField type="number" fullWidth label="最大字数" value={form.max_word_count} onChange={set('max_word_count')} error={!!errors.max_word_count} helperText={errors.max_word_count} slotProps={{ input: { ...integerInputBase, min: 1, max: MAX_UINT32, step: 1 } }} /></Grid2>
-        <Grid2 size={2}><TextField type="number" fullWidth label="文件上限MB(自动估算)" value={form.max_file_size_mb} slotProps={{ input: { readOnly: true } }} error={!!errors.max_file_size_mb} helperText={errors.max_file_size_mb} /></Grid2>
         <Grid2 size={2}><TextField type="number" fullWidth label="最多修改次数" value={form.max_modifications} onChange={set('max_modifications')} error={!!errors.max_modifications} helperText={errors.max_modifications} slotProps={{ input: { ...integerInputBase, min: 1, max: MAX_UINT32, step: 1 } }} /></Grid2>
 
         <Grid2 size={3}>
